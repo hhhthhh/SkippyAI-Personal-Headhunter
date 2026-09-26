@@ -1,9 +1,9 @@
-🤝 Skippy - AI Job Matcher & Scraper
+# 🤝 Skippy - AI Job Matcher & Scraper
 A persistent, locally hosted Streamlit application that automates the job application process. Skippy scrapes job boards, evaluates roles against your master resume using AI, and automatically generates tailored resumes, cover letters, and custom interview prep materials.
 
 All generated content and evaluation histories are saved locally to a persistent JSON database, keeping your data entirely private and seamlessly accessible across sessions.
 
-✨ Features
+## ✨ Features
 Automated Scraping: Batch evaluate specific job URLs or use the Universal Auto-Scraper to extract and evaluate roles directly from search result pages.
 
 Smart Evaluation: AI grades job descriptions against your resume, checking for hard blockers (e.g., clearances) and providing an alignment score (0-100).
@@ -16,10 +16,10 @@ Model Agnostic: Works natively with Google Gemini (default), OpenAI, Anthropic, 
 
 Persistent History: Automatically saves match scores, synthesized position names, red flags, and generated text so you can review them later without burning API credits.
 
-🚀 Zero-Prerequisite Deployment
+## 🚀 Zero-Prerequisite Deployment
 Skippy is distributed in three distinct packages tailored for your environment. Download the specific .zip release for your operating system. There is no need to manually install Python dependencies or set up environments—the bootstrappers handle everything automatically.
 
-Option A: Windows Deployment (Skippy-Windows.zip)
+### Option A: Windows Deployment (Skippy-Windows.zip)
 This zero-prerequisite package isolates the entire runtime. It does not require Administrator privileges and will not interfere with any existing global Python installations.
 
 Extract Skippy-Windows.zip to a local folder.
@@ -32,7 +32,7 @@ The script will automatically download a portable Python 3.11 engine, build a se
 
 Note: Future launches will skip the download process and boot Skippy instantly.
 
-Option B: Linux / macOS / WSL Deployment (Skippy-Unix.zip)
+### Option B: Linux / macOS / WSL Deployment (Skippy-Unix.zip)
 This package requires Python 3 to be installed on the host machine but handles all isolated venv creation and dependency management automatically.
 
 Extract Skippy-Unix.zip to a local directory.
@@ -49,7 +49,7 @@ Bash
 ./launch.sh
 Press y when prompted. The script will configure the environment, prompt for sudo to install missing OS-level Chromium dependencies if necessary, and launch the UI.
 
-Option C: Docker Deployment (Skippy-Docker.zip)
+### Option C: Docker Deployment (Skippy-Docker.zip)
 The cleanest method for homelab environments. This pulls a lightweight Debian Python 3.11 image and maps your local directory as a volume, ensuring all generated .md documents and job_results.json histories persist across container restarts.
 
 Requirement: Docker Engine / Docker Desktop installed and running.
