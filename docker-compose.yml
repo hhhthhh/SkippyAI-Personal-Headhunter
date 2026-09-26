@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  skippy:
+    build: .
+    container_name: skippy-app
+    ports:
+      - "8501:8501"
+    volumes:
+      # Map the current directory to /app to persist history and generated docs
+      - .:/app
+    restart: unless-stopped

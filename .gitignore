@@ -1,0 +1,20 @@
+# Environments
+venv/
+python_runtime/
+.env
+
+# Playwright & Cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# User Data & History
+job_results.json
+job_history.txt
+custom_prompt.txt
+prompt_presets.json
+generated_docs/
+job_description.txt
+resume.md
+*.docx
+*.pdf
