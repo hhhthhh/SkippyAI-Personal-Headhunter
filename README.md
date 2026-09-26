@@ -1,78 +1,74 @@
-# 🛡️ AI Job Matcher & Scraper
+🤝 Skippy - AI Job Matcher & Scraper
+A persistent, locally hosted Streamlit application that automates the job application process. Skippy scrapes job boards, evaluates roles against your master resume using AI, and automatically generates tailored resumes, cover letters, and custom interview prep materials.
 
-A persistent, locally hosted Streamlit application that automates the job application process. It scrapes job boards, evaluates roles against your master resume using AI, and automatically generates tailored resumes, cover letters, and custom interview prep materials. 
+All generated content and evaluation histories are saved locally to a persistent JSON database, keeping your data entirely private and seamlessly accessible across sessions.
 
-All generated content and evaluation histories are saved locally to a persistent JSON database, keeping your data entirely private.
+✨ Features
+Automated Scraping: Batch evaluate specific job URLs or use the Universal Auto-Scraper to extract and evaluate roles directly from search result pages.
 
-## ✨ Features
-* **Automated Scraping:** Batch evaluate specific job URLs or use the Universal Auto-Scraper to extract and evaluate roles directly from search result pages.
-* **Smart Evaluation:** AI grades job descriptions against your resume, checking for hard blockers (e.g., clearances) and providing an alignment score (0-100).
-* **Generative Tools:** Instantly generate tailored Resumes, conversational Cover Letters, and STAR-method Interview Prep sheets in downloadable `.docx` formats.
-* **Model Agnostic:** Works with Google Gemini, OpenAI (ChatGPT), Anthropic (Claude), xAI (Grok), or fully offline using local Ollama instances.
-* **Persistent History:** Automatically saves match scores, red flags, and generated text so you can review them later without burning API credits.
+Smart Evaluation: AI grades job descriptions against your resume, checking for hard blockers (e.g., clearances) and providing an alignment score (0-100).
 
----
+Generative Tools: Instantly generate tailored Resumes, conversational Cover Letters, and STAR-method Interview Prep sheets in downloadable .docx formats from unlocked job tabs.
 
-## 🚀 Installation & Setup
+Flat UI Architecture: 100% flat UI design using standard Streamlit tabs and expanders for a stable, fast, and crash-free experience.
 
-You can run this application entirely containerized via Docker (Recommended) or directly on your machine. 
+Model Agnostic: Works natively with Google Gemini (default), OpenAI, Anthropic, or fully offline using local Ollama instances.
 
-### Option A: Docker Deployment (Recommended)
-This is the easiest method and requires zero Python knowledge. It pulls an official Microsoft Playwright image so you don't have to install browser binaries on your host machine.
+Persistent History: Automatically saves match scores, synthesized position names, red flags, and generated text so you can review them later without burning API credits.
 
-**Requirements:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
+🚀 Zero-Prerequisite Deployment
+Skippy is distributed in three distinct packages tailored for your environment. Download the specific .zip release for your operating system. There is no need to manually install Python dependencies or set up environments—the bootstrappers handle everything automatically.
 
-1. Clone or download this repository.
-2. Open your terminal in the project folder.
-3. Build and launch the container:
-   ```bash
-   docker compose build --no-cache
-   docker compose up -d
+Option A: Windows Deployment (Skippy-Windows.zip)
+This zero-prerequisite package isolates the entire runtime. It does not require Administrator privileges and will not interfere with any existing global Python installations.
 
-### Option B: Windows Local Installation 
-If you prefer running the application directly on your machine, you will need to use the automated install scripts. These scripts will check for Python, build a secure virtual environment, install the required libraries, and download the headless Chromium browser used for web scraping.
+Extract Skippy-Windows.zip to a local folder.
 
-Requirements: Python 3.10+ (The Windows script will attempt to install this automatically if missing).
+Double-click Launch-Windows.bat.
 
-For Windows Users:
-Double-click the install.bat file in the project folder.
+Press Y when prompted.
 
-⚠️ Note: If the script installs Python for you via winget, you must close the terminal, open a new one, and run install.bat again so Windows recognizes the new Python path.
+The script will automatically download a portable Python 3.11 engine, build a secure virtual environment, fetch the required Playwright Chromium binaries, and launch the application.
 
-Once the installation completes successfully, double-click start.bat to launch the application.
+Note: Future launches will skip the download process and boot Skippy instantly.
 
-The app will open automatically in your default web browser at http://localhost:8501.
+Option B: Linux / macOS / WSL Deployment (Skippy-Unix.zip)
+This package requires Python 3 to be installed on the host machine but handles all isolated venv creation and dependency management automatically.
 
-### For Linux / macOS / WSL Users Local Installation:
-Open your terminal in the project directory.
+Extract Skippy-Unix.zip to a local directory.
 
-Make the installation and startup scripts executable:
+Open your terminal in the extracted folder.
+
+Make the script executable:
 
 Bash
-chmod +x install.sh start.sh
-Run the installer (this uses apt-get to fetch Python if you are on Debian/Ubuntu):
+chmod +x launch.sh
+Execute the bootstrapper:
 
 Bash
-./install.sh
-Once complete, launch the application:
+./launch.sh
+Press y when prompted. The script will configure the environment, prompt for sudo to install missing OS-level Chromium dependencies if necessary, and launch the UI.
 
-Bash
-./start.sh
+Option C: Docker Deployment (Skippy-Docker.zip)
+The cleanest method for homelab environments. This pulls a lightweight Debian Python 3.11 image and maps your local directory as a volume, ensuring all generated .md documents and job_results.json histories persist across container restarts.
+
+Requirement: Docker Engine / Docker Desktop installed and running.
+
+Extract Skippy-Docker.zip.
+
+Open the folder and run the appropriate launcher for your host OS:
+
+Windows: Double-click Launch-Docker.bat
+
+Mac/Linux: Run chmod +x launch-docker.sh && ./launch-docker.sh
+
+The script will build the container in detached mode and provide the http://localhost:8501 link.
+
 ⚙️ First-Time Initialization
-Before you can evaluate your first job posting, you must configure your local profile:
+Before you can evaluate your first job posting, configure your local profile directly within the Skippy UI:
 
-Provide Your Master Resume:
+Provide Your Master Resume: Navigate to the "⚙️ Resume & Prompts Config" tab. Paste your full, plain-text master resume into the editor and click Save Resume. This generates the local resume.md file the AI uses as its baseline.
 
-Navigate to the "⚙️ Resume & Prompts Config" page via the left sidebar.
+Configure Your API Key: Select your preferred AI Provider / Model (e.g., gemini-3.6-flash). Paste your API key in the designated field. (If using a local Ollama model, simply ensure your local server is running on port 11434 and leave the key blank).
 
-Paste your full, plain-text master resume into the editor and click Save Resume. This generates the local resume.md file the AI uses as its baseline.
-
-Configure Your API Key:
-
-In the sidebar, select your preferred AI Provider / Model.
-
-Paste your API key in the password field. (If using a local Ollama model, simply ensure your local server is running on port 11434 and leave the key blank).
-
-Adjust Target Score:
-
-Set your "Minimum Target Score" slider. Jobs scoring above this threshold will be flagged as a ✅ Strong Match, while jobs below it will be flagged as a ⚠️ Reach.
+Adjust Target Score: Set your "Minimum Target Score" slider. Jobs scoring above this threshold will be flagged as a ✅ Strong Match, while jobs below it will be flagged as a ⚠️ Reach.
