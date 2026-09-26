@@ -479,7 +479,7 @@ def render_batch_results(batch_results, min_score):
 # --- Streamlit UI Layout ---
 st.set_page_config(page_title="Job Matcher AI", layout="wide")
 
-st.title("🛡️ AI Job Matcher & Scraper")
+st.title("🤝 Skippy - Your AI Headhunter")
 st.write("Evaluate job descriptions against your master resume using AI.")
 
 # --- Sidebar Configuration ---
