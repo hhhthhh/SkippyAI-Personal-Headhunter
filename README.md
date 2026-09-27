@@ -64,7 +64,7 @@ Mac/Linux: Run chmod +x launch-docker.sh && ./launch-docker.sh
 
 The script will build the container in detached mode and provide the http://localhost:8501 link.
 
-⚙️ First-Time Initialization
+## ⚙️ First-Time Initialization
 Before you can evaluate your first job posting, configure your local profile directly within the Skippy UI:
 
 Provide Your Master Resume: Navigate to the "⚙️ Resume & Prompts Config" tab. Paste your full, plain-text master resume into the editor and click Save Resume. This generates the local resume.md file the AI uses as its baseline.

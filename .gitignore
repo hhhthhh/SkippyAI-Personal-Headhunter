@@ -17,5 +17,6 @@ generated_docs/
 job_description.txt
 resume.md
 build_releases.sh
+releases/
 *.docx
 *.pdf
