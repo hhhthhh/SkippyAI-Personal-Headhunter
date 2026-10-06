@@ -14,8 +14,7 @@ def scrape_job_text(url: str, page: Page = None) -> str:
     # 1. OPTIMIZED BATCH MODE: If an active Playwright page is passed, use it directly
     if page:
         try:
-            page.goto(url, timeout=15000)
-            page.wait_for_load_state("domcontentloaded")
+            page.goto(url, wait_until="domcontentloaded", timeout=15000)
             html_content = page.content()
             soup = BeautifulSoup(html_content, "html.parser")
             for element in soup(["script", "style", "nav", "footer", "header", "aside"]):
@@ -46,8 +45,7 @@ def scrape_job_text(url: str, page: Page = None) -> str:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             temp_page = browser.new_page(user_agent=headers["User-Agent"])
-            temp_page.goto(url, timeout=15000)
-            temp_page.wait_for_load_state("domcontentloaded")
+            temp_page.goto(url, wait_until="domcontentloaded", timeout=15000)
             html_content = temp_page.content()
             browser.close()
             
@@ -67,9 +65,12 @@ def scrape_universal_search_results(search_url: str) -> list[str]:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            page.goto(search_url, timeout=20000)
-            page.wait_for_load_state("domcontentloaded")
-            time.sleep(3)
+            
+            # CRITICAL FIX: Tell Playwright not to wait for background analytics/ads
+            page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+            
+            # Wait specifically for links to appear
+            page.wait_for_selector("a", timeout=10000)
             
             all_links = page.eval_on_selector_all("a", "elements => elements.map(e => e.href)")
             valid_keywords = ['/job/', '/jobs/', '/careers/', '/posting/', '/position/', 'reqid=', '/role/']

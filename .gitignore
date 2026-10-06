@@ -3,19 +3,25 @@ venv/
 python_runtime/
 .env
 
+# IDE & System Files
+.vscode/
+.DS_Store
+
 # Playwright & Cache
 __pycache__/
 *.pyc
 .pytest_cache/
 
-# User Data & History
+# User Data & History (DO NOT TRACK)
+skippy.db
 job_results.json
 job_history.txt
-custom_prompt.txt
-prompt_presets.json
-generated_docs/
 job_description.txt
 resume.md
+config.json
+
+# Build & Generated Outputs
+generated_docs/
 build_releases.sh
 releases/
 *.docx

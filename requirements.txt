@@ -8,3 +8,4 @@ anthropic
 pydantic
 python-docx
 requests
+python-dotenv
