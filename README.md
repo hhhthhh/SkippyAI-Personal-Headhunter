@@ -1,4 +1,4 @@
-# 🤝 Skippy - AI Job Matcher & Scraper
+# 🤝 Skippy - Your Personal Headhunter
 A persistent, locally hosted Streamlit application that automates the job application process. Skippy scrapes job boards, evaluates roles against your master resume using AI, and automatically generates tailored resumes, cover letters, and custom interview prep materials.
 
 All generated content and evaluation histories are saved locally to a persistent JSON database, keeping your data entirely private and seamlessly accessible across sessions.
