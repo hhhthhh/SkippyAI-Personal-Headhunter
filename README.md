@@ -1,10 +1,5 @@
-<<<<<<< HEAD
-# 🤝 Skippy - AI Job Matcher & Scraper
-A persistent, locally hosted Streamlit application that automates the job application process. Skippy scrapes job boards, evaluates roles against your master resume using AI, and can generate tailored resumes, cover letters, and custom interview prep materials.   
-=======
 # 🤝 Skippy - Your Personal Headhunter
 A persistent, locally hosted Streamlit application that automates the job application process. Skippy scrapes job boards, evaluates roles against your master resume using AI, and automatically generates tailored resumes, cover letters, and custom interview prep materials.
->>>>>>> 87893e1d68756960eb1f4445d8f0e597cc344c67
 
 All generated content and evaluation histories are saved locally to a persistent SQLite database (skippy.db), keeping your data entirely private and seamlessly accessible across sessions.
 
@@ -67,9 +62,7 @@ Before you can evaluate your first job posting, configure your local profile dir
 
 Provide Your Master Resume: Navigate to the "⚙️ Editors" page. Paste your full, plain-text master resume into the editor and click Save Resume. This updates the baseline data the AI uses for matching.   
 
-Configure Your API Key: Select your preferred AI Provider / Model (e.g., gemini-3.6-flash) in the sidebar. Paste your API key in the designated field. (If using a local Ollama model, simply ensure your local server is running on port 11434 and leave the key blank).   
-
-<<<<<<< HEAD
+Configure Your API Key: Select your preferred AI Provider / Model (e.g., gemini-3.6-flash) in the sidebar. Paste your API key in the designated field. (If using a local Ollama model, simply ensure your local server is running on port 11434 and leave the key blank).
 Adjust Target Score: On the Scraper page, set your "Minimum Target Score" slider. Jobs scoring above this threshold will be flagged as a ✅ Strong Match, while jobs below it will be flagged as a ⚠️ Reach Match.
 =======
 Adjust Target Score: Set your "Minimum Target Score" slider. Jobs scoring above this threshold will be flagged as a ✅ Strong Match, while jobs below it will be flagged as a ⚠️ Reach.
