@@ -83,4 +83,4 @@ echo " to turn the application off."
 echo "======================================================="
 echo ""
 
-streamlit run app.py --browser.gatherUsageStats=false
+python3 -m streamlit run app.py --server.port=8501 --server.address=localhost --browser.gatherUsageStats=false

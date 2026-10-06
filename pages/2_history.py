@@ -66,7 +66,6 @@ if active_job_id is not None:
         height=0
     )
 
-@st.fragment
 def application_status_tracker(item: dict):
     url = item.get("URL")
     statuses = ["Not Applied", "Applied", "Interviewing", "Waitlisted", "Rejected", "Offer"]
@@ -84,10 +83,19 @@ def document_generator(item: dict, doc_type: str, generator_func):
     url, job_text = item.get("URL"), item.get("Job Text", "")
     cache_key = f"{doc_type}_{url}"
     
-    if cache_key not in st.session_state and item.get(doc_type):
-        st.session_state[cache_key] = item[doc_type]
+    # 1. Safely pull existing content from DB, forcing None/NaN to an empty string
+    db_content = item.get(doc_type)
+    if not db_content or str(db_content).lower() == "nan":
+        db_content = ""
         
-    if not st.session_state.get(cache_key):
+    # 2. Sync to session state to ensure Streamlit always has a valid string
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = db_content
+        
+    current_content = st.session_state[cache_key]
+    
+    # 3. If there is no content, show the Generate button
+    if not current_content:
         if st.button(f"⚡ Generate {doc_type}", key=f"btn_{cache_key}"):
             with st.spinner(f"Generating {doc_type}..."):
                 content = generator_func(
@@ -95,12 +103,19 @@ def document_generator(item: dict, doc_type: str, generator_func):
                     st.session_state.get("user_api_key"), st.session_state.get("local_base_url"), st.session_state.get("local_model_name")
                 )
                 st.session_state[cache_key] = content
+                import database as db
                 db.update_job_field(url, doc_type, content)
+                
+                # Because we are in a fragment, this st.rerun() safely reloads JUST the tab!
                 st.rerun()
+                
+    # 4. If content exists, show the Markdown editor and download options
     else:
-        edited_doc = st.text_area(f"{doc_type} (Markdown)", value=st.session_state[cache_key], height=400, key=f"editor_{cache_key}")
-        if edited_doc != st.session_state[cache_key]:
+        edited_doc = st.text_area(f"{doc_type} (Markdown)", value=current_content, height=400, key=f"editor_{cache_key}")
+        
+        if edited_doc != current_content:
             st.session_state[cache_key] = edited_doc
+            import database as db
             db.update_job_field(url, doc_type, edited_doc)
             
         col1, _, col2 = st.columns([3.2, 5.8, 1.5])
@@ -108,7 +123,8 @@ def document_generator(item: dict, doc_type: str, generator_func):
             st.download_button("📥 Download (.docx)", data=generate_docx_from_markdown(edited_doc), file_name=f"{doc_type.replace(' ', '_')}.docx", type="primary", key=f"dl_{cache_key}")
         with col2:
             if st.button("🔄 Regenerate", key=f"regen_{cache_key}"):
-                del st.session_state[cache_key]
+                st.session_state[cache_key] = ""
+                import database as db
                 db.update_job_field(url, doc_type, "")
                 st.rerun()
 
@@ -123,13 +139,35 @@ for idx, item in enumerate(batch_results):
     with st.expander(f"{status_icon} Score: {item['Score']}/100 — {item['URL']}", expanded=(active_job_id == idx)):
         tabs = st.tabs(["Overview", "⚡ Tailor Resume", "✉️️ Cover Letter", "🎤 Interview Prep"])
         with tabs[0]:
-            c1, c2, _ = st.columns([1.2, 2.0, 6.8])
-            if item["URL"].startswith("http"): c1.link_button("🚀 Apply to this Job", item["URL"], type="primary")
-            with c2: application_status_tracker(item)
-            st.write(f"**Summary:** {item['Summary']}")
-            if item["Red Flags"]:
-                st.warning("🚨 **Red Flags:**")
-                for f in item["Red Flags"].split(" | "): st.markdown(f"- {f}")
-        with tabs[1]: document_generator(item, "Tailored Resume", tailor_resume)
-        with tabs[2]: document_generator(item, "Cover Letter", tailor_cover_letter)
-        with tabs[3]: document_generator(item, "Interview Prep", generate_interview_prep)
+                    c1, c2, _ = st.columns([1.2, 2.0, 6.8])
+                    if item["URL"].startswith("http"): c1.link_button("🚀 Apply to this Job", item["URL"], type="primary")
+                    with c2: application_status_tracker(item)
+                    st.write(f"**Summary:** {item['Summary']}")
+                    
+                    if item["Red Flags"]:
+                        st.warning("🚨 **Red Flags:**")
+                        for f in item["Red Flags"].split(" | "): 
+                            if f.strip():
+                                # Added the proper color emoji here
+                                st.markdown(f"- ⚠️ {f.strip()}")
+                    
+                    if item.get("Eligible"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("**Matching Skills:**")
+                            for skill in item.get("Matching Skills", "").split(", "):
+                                if skill.strip():
+                                    st.markdown(f"- ✅ {skill.strip()}")
+                        with col2:
+                            st.markdown("**Missing Skills / Gaps:**")
+                            for gap in item.get("Missing Skills", "").split(", "):
+                                if gap.strip():
+                                    # Swapped the text-symbol for the color emoji here
+                                    st.markdown(f"- ⚠️️ {gap.strip()}")
+        with tabs[1]:
+            document_generator(item, "Tailored Resume", tailor_resume)
+        with tabs[2]:
+            document_generator(item, "Cover Letter", tailor_cover_letter)
+        with tabs[3]:
+            document_generator(item, "Interview Prep", generate_interview_prep)
+                    

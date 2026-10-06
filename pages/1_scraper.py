@@ -29,14 +29,22 @@ max_jobs = st.sidebar.slider("Max Postings to Evaluate", min_value=1, max_value=
 
 @st.fragment
 def document_generator(item: dict, doc_type: str, generator_func):
-    """Handles on-the-fly document generation directly inside the scraper cards."""
     url, job_text = item.get("URL"), item.get("Job Text", "")
     cache_key = f"{doc_type}_{url}"
     
-    if cache_key not in st.session_state and item.get(doc_type):
-        st.session_state[cache_key] = item[doc_type]
+    # 1. Safely pull existing content from DB, forcing None/NaN to an empty string
+    db_content = item.get(doc_type)
+    if not db_content or str(db_content).lower() == "nan":
+        db_content = ""
         
-    if not st.session_state.get(cache_key):
+    # 2. Sync to session state to ensure Streamlit always has a valid string
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = db_content
+        
+    current_content = st.session_state[cache_key]
+    
+    # 3. If there is no content, show the Generate button
+    if not current_content:
         if st.button(f"⚡ Generate {doc_type}", key=f"btn_{cache_key}"):
             with st.spinner(f"Generating {doc_type}..."):
                 content = generator_func(
@@ -44,12 +52,19 @@ def document_generator(item: dict, doc_type: str, generator_func):
                     st.session_state.get("user_api_key"), st.session_state.get("local_base_url"), st.session_state.get("local_model_name")
                 )
                 st.session_state[cache_key] = content
+                import database as db
                 db.update_job_field(url, doc_type, content)
+                
+                # The fragment safely traps this rerun so the tab does not reset!
                 st.rerun()
+                
+    # 4. If content exists, show the Markdown editor and download options
     else:
-        edited_doc = st.text_area(f"{doc_type} (Markdown)", value=st.session_state[cache_key], height=400, key=f"editor_{cache_key}")
-        if edited_doc != st.session_state[cache_key]:
+        edited_doc = st.text_area(f"{doc_type} (Markdown)", value=current_content, height=400, key=f"editor_{cache_key}")
+        
+        if edited_doc != current_content:
             st.session_state[cache_key] = edited_doc
+            import database as db
             db.update_job_field(url, doc_type, edited_doc)
             
         col1, _, col2 = st.columns([3.2, 5.8, 1.5])
@@ -57,7 +72,8 @@ def document_generator(item: dict, doc_type: str, generator_func):
             st.download_button("📥 Download (.docx)", data=generate_docx_from_markdown(edited_doc), file_name=f"{doc_type.replace(' ', '_')}.docx", type="primary", key=f"dl_{cache_key}")
         with col2:
             if st.button("🔄 Regenerate", key=f"regen_{cache_key}"):
-                del st.session_state[cache_key]
+                st.session_state[cache_key] = ""
+                import database as db
                 db.update_job_field(url, doc_type, "")
                 st.rerun()
 
@@ -97,7 +113,7 @@ def render_evaluation_card(match_data: dict):
                     st.markdown("**Missing Skills / Gaps:**")
                     for gap in match_data.get("Missing Skills", "").split(", "):
                         if gap.strip():
-                            st.markdown(f"- ⚠ {gap.strip()}")
+                            st.markdown(f"- ⚠️ {gap.strip()}")
                             
         with tabs[1]:
             document_generator(match_data, "Tailored Resume", tailor_resume)

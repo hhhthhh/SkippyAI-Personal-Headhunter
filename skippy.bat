@@ -2,23 +2,19 @@
 title Skippy - Local Server
 color 0A
 
-:: Ensure the script runs in the current directory
 cd /d "%~dp0"
 
-:: FAST BOOT: Skip setup if virtual environment already exists
-IF EXIST "venv\Scripts\python.exe" GOTO FastBoot
+:: FAST BOOT: Skip setup if the environment is already built
+IF EXIST "python_runtime\Scripts\streamlit.exe" GOTO LaunchApp
 
-:: =======================================================
-:: FIRST-TIME SETUP
-:: =======================================================
 echo =======================================================
 echo               Skippy - Windows Bootstrapper
 echo =======================================================
 echo.
 echo DISCLAIMER:
 echo To run Skippy without requiring manual setup, this script will:
-echo  1. Automatically download an isolated Python 3.11 engine.
-echo  2. Create a secure, isolated virtual environment.
+echo  1. Download the official Python 3.11 Portable Zip.
+echo  2. Configure it with PIP and required standard libraries.
 echo  3. Install critical dependencies (Streamlit, Playwright, etc.).
 echo.
 echo NOTE: You will need a valid AI API key (Gemini, OpenAI, GROK or Anthropic)
@@ -37,29 +33,29 @@ exit
 
 :BeginSetup
 echo.
-IF EXIST "python_runtime\tools\python.exe" GOTO CheckVenv
-
-:: Wipe any broken/incomplete zip files from previous interrupted attempts
+:: Cleanup any failed previous attempts
 del /q /f python_portable.zip 2>nul
+rmdir /s /q python_runtime 2>nul
 
-echo [1/5] Downloading portable Python 3.11 engine...
-curl -# -L -o python_portable.zip https://www.nuget.org/api/v2/package/python/3.11.9
+echo [1/5] Downloading Python 3.11 Portable (Embeddable)...
+curl -# -L -o python_portable.zip https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip
 
 echo [2/5] Extracting Python natively...
 powershell -command "Expand-Archive -Path 'python_portable.zip' -DestinationPath 'python_runtime' -Force"
 del python_portable.zip
 
-:CheckVenv
-echo [3/5] Building isolated application environment...
-"python_runtime\tools\python.exe" -m venv venv
+echo [3/5] Configuring Python for application use (Enabling PIP)...
+:: The portable version needs the 'site' module enabled to use pip
+powershell -command "(Get-Content python_runtime\python311._pth) -replace '#import site', 'import site' | Set-Content python_runtime\python311._pth"
+curl -# -L -o python_runtime\get-pip.py https://bootstrap.pypa.io/get-pip.py
+"python_runtime\python.exe" "python_runtime\get-pip.py" --no-warn-script-location >nul
 
 echo [4/5] Installing application dependencies...
-call "venv\Scripts\activate.bat"
-python -m pip install --quiet --upgrade pip
-pip install --quiet -r requirements.txt
+"python_runtime\python.exe" -m pip install --quiet --upgrade pip
+"python_runtime\python.exe" -m pip install --quiet -r requirements.txt
 
 echo [5/5] Fetching web drivers for the scraper...
-playwright install chromium
+"python_runtime\Scripts\playwright.exe" install chromium
 
 echo.
 echo Initial setup complete!
@@ -68,9 +64,6 @@ GOTO LaunchApp
 :: =======================================================
 :: LAUNCH SEQUENCE (Runs every time)
 :: =======================================================
-:FastBoot
-call "venv\Scripts\activate.bat"
-
 :LaunchApp
 :: Suppress the Streamlit Welcome/Email prompt permanently
 mkdir "%USERPROFILE%\.streamlit" 2>nul
@@ -88,4 +81,4 @@ echo  turn the application off.
 echo =======================================================
 echo.
 
-streamlit run app.py --browser.gatherUsageStats=false
+"python_runtime\python.exe" -m streamlit run app.py --server.port=8501 --server.address=localhost --browser.gatherUsageStats=false
