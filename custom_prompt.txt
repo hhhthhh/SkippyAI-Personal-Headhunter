@@ -7,3 +7,4 @@ EVALUATION INSTRUCTIONS:
 4 **Resume Recommendations:** Advise the applicant which words to include in their resume based off experience.
 5. **Advisement:** Advise the applicant if they should apply for the position or not.
 6. **Relevant skill check:** List some relevant skills that align with the user's technical experience and projects in the summary if they are eligible for the position and advised to apply.
+7.  **Detail check:** Identify the name of the company and the name of the position and list it in the summary.

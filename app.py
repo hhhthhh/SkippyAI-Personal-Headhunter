@@ -10,11 +10,11 @@ enforce_onboarding()
 
 # 3. Router Navigation
 pages = [
-    st.Page("pages/0_about.py", title="About", icon="👋"),
     st.Page("pages/1_scraper.py", title="Scraper", icon="🔍"),
     st.Page("pages/2_history.py", title="History", icon="📁"),
     st.Page("pages/3_metrics.py", title="Metrics", icon="📊"),
-    st.Page("pages/4_editors.py", title="Editors", icon="⚙️")
+    st.Page("pages/4_editors.py", title="Editors", icon="⚙️"),
+    st.Page("pages/0_about.py", title="About", icon="👋")
 ]
 
 pg = st.navigation(pages)

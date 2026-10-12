@@ -47,8 +47,8 @@ if [ ! -d "venv" ]; then
     
     echo "[2/4] Installing application dependencies..."
     source venv/bin/activate
-    python3 -m pip install --upgrade pip
-    pip install -r requirements.txt
+    python3 -m pip install --quiet --upgrade pip
+    pip install --quiet -r requirements.txt
     
     echo "[3/4] Fetching web drivers and system dependencies for the scraper..."
     playwright install chromium

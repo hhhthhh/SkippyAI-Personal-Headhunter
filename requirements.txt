@@ -2,9 +2,8 @@ streamlit
 pandas
 beautifulsoup4
 playwright
-google-genai
+litellm
 openai
-anthropic
 pydantic
 python-docx
 requests

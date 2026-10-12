@@ -51,8 +51,8 @@ curl -# -L -o python_runtime\get-pip.py https://bootstrap.pypa.io/get-pip.py
 "python_runtime\python.exe" "python_runtime\get-pip.py" --no-warn-script-location >nul
 
 echo [4/5] Installing application dependencies...
-"python_runtime\python.exe" -m pip install --quiet --upgrade pip
-"python_runtime\python.exe" -m pip install --quiet -r requirements.txt
+"python_runtime\python.exe" -m pip install --quiet --no-warn-script-location --upgrade pip
+"python_runtime\python.exe" -m pip install --quiet --no-warn-script-location -r requirements.txt
 
 echo [5/5] Fetching web drivers for the scraper...
 "python_runtime\Scripts\playwright.exe" install chromium

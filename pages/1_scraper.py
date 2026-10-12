@@ -83,8 +83,8 @@ def render_evaluation_card(match_data: dict):
     eligible = match_data.get("Eligible", True)
     status_icon = "❌" if not eligible else ("✅" if score >= min_score else "⚠️️")
     
-    with st.expander(f"{status_icon} Score: {score}/100 — {match_data.get('Position', 'Job Posting')}", expanded=True):
-        tabs = st.tabs(["Overview", "⚡ Tailor Resume", "✉ Cover Letter", "🎤 Interview Prep"])
+    with st.expander(f"{status_icon} Score: {score}/100 — {match_data.get('Position', 'Job Posting')}", expanded=False):
+        tabs = st.tabs(["Overview", "⚡ Tailor Resume", "✉️️ Cover Letter", "🎤 Interview Prep"])
         
         with tabs[0]:
             if not eligible:

@@ -8,5 +8,5 @@ services:
       - "8501:8501"
     volumes:
       # Map the current directory to /app to persist history and generated docs
-      - .:/app
+      - ./skippy.db:/app/skippy.db
     restart: unless-stopped
