@@ -1,67 +1,47 @@
-# 🤝 Skippy - AI Job Matcher & Scraper
-A persistent, locally hosted Streamlit application that automates the job application process. Skippy scrapes job boards, evaluates roles against your master resume using AI, and can generate tailored resumes, cover letters, and custom interview prep materials.   
+> ⚠️ **Project Status: Active Beta.** Skippy is a locally-hosted engineering tool in active development. While the core scraping and evaluation pipelines are fully operational, you may encounter edge cases with highly obfuscated job boards or transient API timeouts. Tracked issues and roadmap items can be found in the Issues tab.
 
-All generated content and evaluation histories are saved locally to a persistent SQLite database (skippy.db), keeping your data entirely private and seamlessly accessible across sessions.
+# 🤝 Skippy - Local-First AI Job CRM & Automated Pipeline
 
-## ✨ Features
-Automated Scraping: Batch evaluate specific job URLs or use the Universal Auto-Scraper to extract and evaluate roles directly from search result pages.   
+Skippy is a privacy-first, locally hosted Streamlit application designed to automate the friction out of the job application process. Built as a secure alternative to expensive SaaS platforms, Skippy scrapes job boards, evaluates roles against your master resume using AI, and generates tailored application materials entirely on your local machine.
 
-Smart Evaluation: AI grades job descriptions against your resume, checking for hard blockers (e.g., clearances) and providing an alignment score (0-100).   
+All generated content, API credentials, and evaluation histories are sandboxed locally, keeping your data strictly private.
 
-Generative Tools: Instantly generate tailored Resumes, conversational Cover Letters, and STAR-method Interview Prep sheets in downloadable .docx formats from unlocked job tabs.   
-
-Multi-Page Architecture: Clean layout using Streamlit's native navigation router for a stable, fast, and crash-free experience across dedicated Scraper, History, and Editor dashboards.
-
-Model Agnostic: Works natively with Google Gemini (default), OpenAI, Anthropic, or fully offline using local Ollama instances.   
-
-Persistent History: Automatically saves match scores, synthesized position names, red flags, and generated text so you can review them later without burning API credits.  
+## ✨ Core Architecture & Features
+* **Event-Driven Scraping:** Utilize the Universal Auto-Scraper to bypass Single Page Application (SPA) restrictions and extract clean DOM content directly from search result pages.
+* **Security & Prompt Defense:** Implements secure local state management by isolating API credentials via `.env` variables and utilizes XML-delimited prompt boundaries to mitigate LLM injection vulnerabilities from malformed job descriptions.
+* **Smart Evaluation:** AI grades job descriptions against your resume, checking for hard blockers (e.g., clearances) and providing an alignment score (0-100).
+* **Generative Tools:** Instantly generate tailored Resumes, conversational Cover Letters, and STAR-method Interview Prep sheets in downloadable `.docx` formats.
+* **Model Agnostic:** Works natively with Google Gemini (default), OpenAI, Anthropic, xAI Grok, or fully offline using local Ollama instances.
+* **Persistent History:** Automatically saves match scores, synthesized position names, red flags, and generated text to a persistent SQLite database (`skippy.db`) so you can review them later without burning API credits.
 
 ## 🚀 Zero-Prerequisite Deployment
-Skippy is distributed in three distinct packages tailored for your environment. Download the specific .zip release for your operating system. There is no need to manually install Python dependencies or set up environments—the bootstrappers handle everything automatically.
+Skippy is distributed in three distinct packages tailored for your operating system/environment. Download the specific `.zip` release for your operating system. There is no need to manually install Python dependencies or anything to for the tool to function correctly, the script will handle everything automatically.
 
-### Option A: Windows Deployment (Skippy-Windows.zip)
-This zero-prerequisite package isolates the entire runtime. It does not require Administrator privileges and will not interfere with any existing global Python installations.   
+### Option A: Windows Deployment (`Skippy-Windows.zip`)
+This zero-prerequisite package isolates the entire runtime. It does not require Administrator privileges and will not interfere with any existing global Python installations.
+1. Extract `Skippy-Windows.zip` to a local folder.
+2. Double-click `skippy.bat`.
+3. Press `Y` when prompted.
+*(The script will automatically download a portable Python engine, build a secure virtual environment, fetch the required Playwright Chromium binaries, and launch the application. Future launches will boot instantly.)*
 
-1. Extract Skippy-Windows.zip to a local folder.   
-2. Double-click skippy.bat.
-3. Press Y when prompted.   
-
-The script will automatically download a portable Python engine, build a secure virtual environment, fetch the required Playwright Chromium binaries, and launch the application. 
-
-Future launches will skip the download process and boot Skippy instantly.   
-
-### Option B: Linux / macOS / WSL Deployment (Skippy-Unix.zip)
+### Option B: Linux / macOS / WSL Deployment (`Skippy-Unix.zip`)
 This package requires Python 3 to be installed on the host machine but handles all isolated venv creation and dependency management automatically.
+1. Extract `Skippy-Unix.zip` to a local directory.
+2. Open your terminal in the extracted folder and run: `chmod +x launch.sh`
+3. Execute the bootstrapper: `./launch.sh`
+4. Press `y` when prompted.
 
-Extract Skippy-Unix.zip to a local directory.
-
-Open your terminal in the extracted folder.
-
-To launch the application:
-
-1. chmod +x launch.sh
-2. Execute the bootstrapper: ./launch.sh
-3. Press y when prompted. 
-
-The script will configure the environment, prompt for sudo to install missing OS-level Chromium dependencies if necessary, and launch the UI.
-
-### Option C: Docker Deployment (Skippy-Docker.zip)
-The cleanest method for homelab environments. This pulls a lightweight Debian Python image and maps your local directory as a volume, ensuring all generated documents and SQLite databases persist across container restarts.
-
-Requirement: Docker Engine / Docker Desktop installed and running.   
-
-1. Extract Skippy-Docker.zip.   
-2. Open the folder and run the appropriate launcher for your host OS:  
- - Windows: Double-click Skippy-Docker-Windows.bat
- - Mac/Linux: Run chmod +x Skippy-LinuxOrMac-Docker-Launch.sh && ./Skippy-LinuxOrMac-Docker-Launch.sh
-
-The script will build the container in detached mode and provide the http://localhost:8501 link.   
+### Option C: Docker Deployment (`Skippy-Docker.zip`)
+The cleanest method for homelab environments. This pulls a lightweight Debian Python image and maps your local directory as a volume, ensuring all generated documents and SQLite databases persist across container restarts. *(Requires Docker Engine / Docker Desktop).*
+1. Extract `Skippy-Docker.zip`.
+2. Open the folder and run the appropriate launcher for your host OS:
+   * **Windows:** Double-click `Skippy-Docker-Windows.bat`
+   * **Mac/Linux:** Run `chmod +x Skippy-LinuxOrMac-Docker-Launch.sh && ./Skippy-LinuxOrMac-Docker-Launch.sh`
 
 ## ⚙️ First-Time Initialization
-Before you can evaluate your first job posting, configure your local profile directly within the Skippy UI:
+Upon your first launch, Skippy will pause the application and prompt you to configure your local profile:
 
-Provide Your Master Resume: Navigate to the "⚙️ Editors" page. Paste your full, plain-text master resume into the editor and click Save Resume. This updates the baseline data the AI uses for matching.   
+1. **Connect Your Provider:** On the main screen, select your preferred AI Provider (e.g., Google Gemini) and securely input your API key. (If using Ollama, simply provide your local `localhost:11434` URL).
+2. **Provide Your Master Resume:** Paste your full, plain-text master resume into the onboarding text area. 
 
-Configure Your API Key: Select your preferred AI Provider / Model (e.g., gemini-3.6-flash) in the sidebar. Paste your API key in the designated field. (If using a local Ollama model, simply ensure your local server is running on port 11434 and leave the key blank).
-
-Adjust Target Score: On the Scraper page, set your "Minimum Target Score" slider. Jobs scoring above this threshold will be flagged as a ✅ Strong Match, while jobs below it will be flagged as a ⚠️ Reach Match.
+Once both steps are completed, skippy will initialize your `.env` and `resume.md` files, unlock the sidebar navigation, and grant access to the Scraper and History dashboards.
