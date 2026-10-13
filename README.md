@@ -1,4 +1,4 @@
-> ⚠️ **Project Status: Active Beta.** Skippy is a locally-hosted engineering tool in active development. While the core scraping and evaluation pipelines are fully operational, you may encounter edge cases with highly obfuscated job boards or transient API timeouts. Tracked issues and roadmap items can be found in the Issues tab.
+> ⚠️ **Project Status: Active Beta.** Skippy is a locally-hosted tool in active development. While the core scraping and evaluation features are fully functional, you may encounter other bugs including but not limited to: API errors, visual bugs, or strange results from untested job boards. Tracked issues and roadmap items can be found in the Issues tab.
 
 # 🤝 Skippy - Local-First AI Job CRM & Automated Pipeline
 
