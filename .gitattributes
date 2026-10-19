@@ -1,0 +1,19 @@
+# Auto-detect text files and normalize to LF in repository
+* text=auto eol=lf
+
+# Force LF on Unix shell scripts, macOS command files, and Dockerfiles
+*.sh text eol=lf
+*.command text eol=lf
+dockerfile text eol=lf
+docker-compose.yml text eol=lf
+
+# Force CRLF on Windows batch scripts
+*.bat text eol=crlf
+
+# Binary archives and databases
+*.zip binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+*.docx binary
+*.pdf binary

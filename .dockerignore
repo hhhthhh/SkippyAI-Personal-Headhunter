@@ -1,3 +1,96 @@
-skippy.db
+# ==============================================================================
+# Skippy - Docker Ignore Configuration
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Virtual Environments & Local Runtimes
+# ------------------------------------------------------------------------------
+test_venv/
+venv/
+env/
+ENV/
+.venv/
 python_runtime/
+python_portable.zip
+
+# ------------------------------------------------------------------------------
+# 2. Version Control & Repository Config
+# ------------------------------------------------------------------------------
+.git/
+.gitignore
+
+# ------------------------------------------------------------------------------
+# 3. Distribution Archives (preserve extension for in-app download)
+# ------------------------------------------------------------------------------
+releases/
+*.zip
+*.tar.gz
+!skippy_extension.zip
+
+# ------------------------------------------------------------------------------
+# 4. Bytecode & Cache Files
+# ------------------------------------------------------------------------------
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ------------------------------------------------------------------------------
+# 5. Sensitive Data & Secrets (CRITICAL: DO NOT BAKE INTO DOCKER IMAGES)
+# ------------------------------------------------------------------------------
+# API keys and environment files
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+*.pem
+*.key
+
+# SQLite databases, journals, and WAL files
+skippy.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite3
+*.sqlite
+
+# User's private resume and generated application documents
+resume.md
+*.docx
+*.pdf
+
+# Runtime queues and temporary files
+inbox.json
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+*.log
+
+# Host-only packaging & launcher scripts
+build_releases.sh
+skippy.bat
+skippy.sh
+skippy.command
+Skippy-Docker-Windows.bat
+Skippy-LinuxOrMac-Docker-Launch.sh
+
+# ------------------------------------------------------------------------------
+# 6. Operating System & Editor Metadata
+# ------------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+.vscode/
+.idea/

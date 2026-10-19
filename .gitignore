@@ -1,28 +1,99 @@
-# Environments
-venv/
-python_runtime/
+# ==============================================================================
+# Skippy - Git Ignore Configuration
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Sensitive Credentials & API Keys (CRITICAL: NEVER COMMIT)
+# ------------------------------------------------------------------------------
 .env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+*.pem
+*.key
 
-# IDE & System Files
-.vscode/
-.DS_Store
-
-# Playwright & Cache
-__pycache__/
-*.pyc
-.pytest_cache/
-
-# User Data & History (DO NOT TRACK)
-skippy.db
-job_results.json
-job_history.txt
-job_description.txt
+# ------------------------------------------------------------------------------
+# 2. Personal Data & User Documents (CRITICAL: NEVER COMMIT)
+# ------------------------------------------------------------------------------
+# User's master resume and generated documents
 resume.md
-config.json
-
-# Build & Generated Outputs
-generated_docs/
-build_releases.sh
-releases/
 *.docx
 *.pdf
+
+# Persistent database, journals, and WAL files
+skippy.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite3
+*.sqlite
+
+# Incoming job queue
+inbox.json
+
+# ------------------------------------------------------------------------------
+# 3. Virtual Environments & Local Runtimes
+# ------------------------------------------------------------------------------
+venv/
+test_venv/
+env/
+ENV/
+.venv/
+python_runtime/
+python_portable.zip
+
+# ------------------------------------------------------------------------------
+# 4. Bytecode, Build Artifacts & Test Caches
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ------------------------------------------------------------------------------
+# 5. Distribution Packages & Archives
+# ------------------------------------------------------------------------------
+releases/
+*.zip
+*.tar.gz
+# Explicitly track the extension installer required by the application
+!skippy_extension.zip
+
+# ------------------------------------------------------------------------------
+# 6. Temporary Files, Backups & Logs
+# ------------------------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+*.log
+
+# ------------------------------------------------------------------------------
+# 7. Operating System & Editor Metadata
+# ------------------------------------------------------------------------------
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+ehthumbs.db
+Thumbs.db
+[Dd]esktop.ini
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

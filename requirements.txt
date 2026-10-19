@@ -1,10 +1,11 @@
 streamlit
 pandas
-beautifulsoup4
+fastapi
+uvicorn
 playwright
-litellm
-openai
-pydantic
 python-docx
-requests
 python-dotenv
+litellm
+requests
+beautifulsoup4
+pydantic

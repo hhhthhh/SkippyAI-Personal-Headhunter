@@ -5,8 +5,19 @@ services:
     build: .
     container_name: skippy-app
     ports:
-      - "8501:8501"
+      # Restrict bindings to loopback on host to prevent unauthorized LAN/public exposure
+      - "127.0.0.1:8501:8501"
+      - "127.0.0.1:8000:8000"
+    environment:
+      - SKIPPY_WEBHOOK_HOST=0.0.0.0
+      - LITELLM_DISABLE_REDACT_SECRETS=true
+      - LITELLM_LOCAL_MODEL_COST_MAP=True
     volumes:
-      # Map the current directory to /app to persist history and generated docs
+      # Persist user data, database, API keys, and custom prompts
       - ./skippy.db:/app/skippy.db
+      - ./.env:/app/.env
+      - ./resume.md:/app/resume.md
+      - ./custom_prompt.txt:/app/custom_prompt.txt
+      - ./prompt_presets.json:/app/prompt_presets.json
+      - ./inbox.json:/app/inbox.json
     restart: unless-stopped

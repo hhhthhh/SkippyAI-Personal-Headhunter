@@ -1,24 +1,97 @@
 #!/bin/bash
+set -e
+
+# Ensure the script runs in the directory it is located in
 cd "$(dirname "$0")"
 
 echo "======================================================="
-echo "             Skippy - Docker Bootstrapper"
+echo "       🐳 Skippy - Docker One-Click Launch (Mac/Linux) "
 echo "======================================================="
 echo ""
-echo "NOTE: You will need a valid AI API key (Gemini, OpenAI, GROK or Anthropic)"
-echo "to use this application unless you are running a local Ollama model."
-echo ""
-echo "Building and starting the Skippy container..."
-docker-compose up -d --build
+
+# 1. Verify Docker is installed
+if ! command -v docker &>/dev/null; then
+    echo "❌ [Error] Docker is not installed on this system."
+    echo ""
+    echo "👉 Please download and install Docker Desktop from:"
+    echo "   https://www.docker.com/products/docker-desktop/"
+    echo ""
+    read -p "Press Enter to exit..."
+    exit 1
+fi
+
+# 2. Check if Docker daemon is running
+if ! docker info &>/dev/null; then
+    echo "Docker Desktop is currently closed or starting up..."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "Attempting to launch Docker Desktop..."
+        open -a Docker 2>/dev/null || true
+        echo "Waiting for Docker to be ready..."
+        for i in {1..30}; do
+            if docker info &>/dev/null; then
+                break
+            fi
+            sleep 2
+        done
+    fi
+
+    if ! docker info &>/dev/null; then
+        echo "❌ [Error] Could not connect to Docker."
+        echo "👉 Please start Docker Desktop, wait for it to finish starting, and run this script again."
+        echo ""
+        read -p "Press Enter to exit..."
+        exit 1
+    fi
+fi
+
+# 3. Detect modern 'docker compose' vs legacy 'docker-compose'
+DOCKER_COMPOSE=""
+if docker compose version &>/dev/null; then
+    DOCKER_COMPOSE="docker compose"
+elif command -v docker-compose &>/dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+else
+    echo "❌ [Error] Neither 'docker compose' nor 'docker-compose' was found."
+    echo "Please update Docker Desktop to the latest version."
+    read -p "Press Enter to exit..."
+    exit 1
+fi
+
+# 4. Pre-create persistence files so Docker won't mount them as directories
+touch skippy.db .env resume.md custom_prompt.txt 2>/dev/null || true
+if [ ! -s inbox.json ]; then
+    echo "[]" > inbox.json 2>/dev/null || true
+fi
+if [ ! -s prompt_presets.json ]; then
+    echo "{}" > prompt_presets.json 2>/dev/null || true
+fi
+chmod 600 skippy.db .env resume.md inbox.json 2>/dev/null || true
+
+echo "🚀 Building and starting the Skippy container..."
+$DOCKER_COMPOSE up -d --build
 
 echo ""
-echo "Container is running! Opening your web browser..."
+echo "⏳ Waiting for Skippy web server to become ready..."
+for i in {1..20}; do
+    if curl -s http://localhost:8501 &>/dev/null; then
+        break
+    fi
+    sleep 1
+done
 
-# Force the default browser to open based on the OS
+echo ""
+echo "======================================================="
+echo " 🎉 SKIPPY IS RUNNING IN DOCKER!"
+echo ""
+echo " 🌐 Dashboard: http://localhost:8501"
+echo ""
+echo " To stop Skippy in the future, run: $DOCKER_COMPOSE down"
+echo "======================================================="
+echo ""
+
+# Open web browser
 if [[ "$OSTYPE" == "darwin"* ]]; then
     open http://localhost:8501
 else
-    xdg-open http://localhost:8501
+    xdg-open http://localhost:8501 2>/dev/null || true
 fi
-
-# Terminal will now exit automatically

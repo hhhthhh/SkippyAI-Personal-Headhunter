@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Skippy Job Catcher",
+  "version": "1.2",
+  "description": "Right-click to send LinkedIn job postings directly to Skippy.",
+  "permissions": [
+    "contextMenus",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.linkedin.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
