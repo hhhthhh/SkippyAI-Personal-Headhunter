@@ -149,18 +149,19 @@ Visual graphs showing:
 
 ## 🧩 Installing the LinkedIn Browser Extension
 
-Want to send jobs from LinkedIn directly into Skippy with a right-click? Here is how to install the extension in **Chrome**, **Brave**, **Edge**, or **Vivaldi**:
+Want to send jobs from LinkedIn directly into Skippy with a right-click? Here is how to install the extension in **Chromium-based** (**Chrome**, **Brave**, **Edge**, **Vivaldi**) or **Firefox-based** (**Firefox**, **Zen**, **LibreWolf**, **Waterfox**) browsers:
 
 1. In Skippy, click on the **LinkedIn Evaluator** tab on the left.
 2. Click the purple button: **📦 Download Extension (.zip)**.
 3. Unzip the downloaded file so you have a regular folder named `skippy-extension`. *(Keep this folder inside your Skippy project folder so it doesn't get accidentally deleted).*
-4. In your browser's address bar, type:
-   - For Chrome / Brave: `chrome://extensions`
-   - For Edge: `edge://extensions`
-5. In the top-right corner, turn on the toggle switch that says **Developer mode**.
-6. In the top-left, click the button that says **Load unpacked**.
-7. Select the `skippy-extension` folder and click **Select**.
-8. **That's it!** Now go to any job on [LinkedIn](https://www.linkedin.com/jobs), right-click on the job posting, and click **⚡ Send Listing to Skippy**. It will appear right in your Skippy inbox!
+4. **For Chromium Browsers (Chrome, Brave, Edge, Vivaldi):**
+   - In your address bar, go to `chrome://extensions` (or `edge://extensions`).
+   - Turn on the **Developer mode** toggle switch in the top-right corner.
+   - Click **Load unpacked** in the top-left and select the `skippy-extension` folder.
+5. **For Firefox Browsers (Firefox, Zen, LibreWolf, Waterfox):**
+   - In your address bar, go to `about:debugging#/runtime/this-firefox`.
+   - Click **Load Temporary Add-on...** and select the `manifest.json` file inside your `skippy-extension` folder.
+6. **That's it!** Now go to any job on [LinkedIn](https://www.linkedin.com/jobs), right-click on the job posting, and click **⚡ Send Listing to Skippy**. It will appear right in your Skippy inbox!
 
 ---
 

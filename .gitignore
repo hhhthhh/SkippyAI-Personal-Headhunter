@@ -58,11 +58,13 @@ htmlcov/
 .ruff_cache/
 
 # ------------------------------------------------------------------------------
-# 5. Distribution Packages & Archives
+# 5. Distribution Packages, Archives & Unzipped Extension
 # ------------------------------------------------------------------------------
 releases/
 *.zip
 *.tar.gz
+# Ignore unzipped extension source directory/files
+skippy-extension/
 # Explicitly track the extension installer required by the application
 !skippy_extension.zip
 

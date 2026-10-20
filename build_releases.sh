@@ -72,19 +72,21 @@ mkdir -p releases
 rm -f releases/*.zip 2>/dev/null || true
 
 # 4. Package latest browser extension bundle
-echo "📦 Packaging Chrome/Chromium extension..."
+echo "📦 Packaging browser extension..."
 if [ -d "skippy-extension" ]; then
     rm -f skippy_extension.zip 2>/dev/null || true
     EXT_VER=$(python3 -c 'import json; print(json.load(open("skippy-extension/manifest.json")).get("version", "unknown"))' 2>/dev/null || echo "unknown")
     create_zip skippy_extension.zip skippy-extension/
     echo "   ✅ skippy_extension.zip updated (v${EXT_VER})"
+elif [ -f "skippy_extension.zip" ]; then
+    echo "   ✅ Using existing skippy_extension.zip"
 else
     echo "⚠️  [Warning] skippy-extension/ directory not found!"
 fi
 
 # 5. Core application files required for all target platforms
 # Includes all application logic (including pipeline.py), prompts, configuration templates, and pages.
-COMMON_FILES="app.py database.py evaluator.py pipeline.py scraper.py utils.py webhook.py requirements.txt custom_prompt.txt prompt_presets.json README.md .env.example skippy_extension.zip skippy-extension/ pages/"
+COMMON_FILES="app.py database.py evaluator.py pipeline.py scraper.py utils.py webhook.py requirements.txt custom_prompt.txt prompt_presets.json README.md .env.example skippy_extension.zip pages/"
 
 # 6. Pre-flight check: Verify all required core files exist
 echo "🔍 Verifying required application files..."

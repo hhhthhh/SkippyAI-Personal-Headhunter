@@ -25,6 +25,7 @@ python_portable.zip
 releases/
 *.zip
 *.tar.gz
+skippy-extension/
 !skippy_extension.zip
 
 # ------------------------------------------------------------------------------

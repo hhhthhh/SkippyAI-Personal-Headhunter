@@ -150,10 +150,13 @@ def render_auto_inbox():
                 with st.expander("🛠️ Setup Instructions", expanded=True):
                     st.markdown("""
                     1. **Download & Extract:** Download the ZIP and extract the `skippy-extension` folder onto your machine (keep it in a permanent folder like your Skippy project folder so it isn't deleted by cleanup tools).
-                    2. **Open Extensions:** In your Chromium browser (Chrome, Brave, Edge, Vivaldi), go to `chrome://extensions` or `vivaldi://extensions`.
-                    3. **Enable Developer Mode:** Toggle the **Developer mode** switch in the top-right corner.
-                    4. **Load Unpacked:** Click **Load unpacked** and select the extracted `skippy-extension` folder.
-                    5. **Capture Postings:** Navigate to LinkedIn, click any job listing, right-click anywhere on the details pane, and select **⚡ Send Listing to Skippy**.
+                    2. **Chromium Browsers (Chrome, Brave, Edge, Vivaldi):**
+                       - Open `chrome://extensions` (or `edge://extensions` / `vivaldi://extensions`).
+                       - Toggle **Developer mode** in the top-right corner, click **Load unpacked**, and select the `skippy-extension` folder.
+                    3. **Firefox Browsers (Firefox, Zen, LibreWolf, Waterfox):**
+                       - Open `about:debugging#/runtime/this-firefox`.
+                       - Click **Load Temporary Add-on...** and select `manifest.json` inside the `skippy-extension` folder.
+                    4. **Capture Postings:** Navigate to LinkedIn, click any job listing, right-click anywhere on the details pane, and select **⚡ Send Listing to Skippy**.
                     """)
 
 render_auto_inbox()
