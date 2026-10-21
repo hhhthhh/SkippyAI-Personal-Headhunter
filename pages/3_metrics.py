@@ -299,7 +299,7 @@ else:
 
         for cat, count in top_flags:
             pct = round((count / total_jobs) * 100) if total_jobs else 0
-            with st.expander(f"**{cat}** — **{count} / {total_jobs} postings ({pct}%)**", expanded=(count > 1)):
+            with st.expander(f"**{cat}** — **{count} / {total_jobs} postings ({pct}%)**", expanded=False):
                 for job_lbl, exact_note in flag_category_examples[cat]:
                     st.markdown(f"- **{job_lbl}:** {exact_note}")
     else:
