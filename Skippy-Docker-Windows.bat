@@ -49,6 +49,7 @@ IF %ERRORLEVEL% NEQ 0 (
 if not exist "skippy.db" type nul > "skippy.db"
 if not exist ".env" type nul > ".env"
 if not exist "resume.md" type nul > "resume.md"
+if not exist "resumes.json" echo {} > "resumes.json"
 if not exist "custom_prompt.txt" type nul > "custom_prompt.txt"
 if not exist "inbox.json" echo [] > "inbox.json"
 if not exist "prompt_presets.json" echo {} > "prompt_presets.json"

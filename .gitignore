@@ -16,8 +16,9 @@
 # ------------------------------------------------------------------------------
 # 2. Personal Data & User Documents (CRITICAL: NEVER COMMIT)
 # ------------------------------------------------------------------------------
-# User's master resume and generated documents
+# User's master resume, multi-resume vault, and generated documents
 resume.md
+resumes.json
 *.docx
 *.pdf
 
@@ -63,8 +64,10 @@ htmlcov/
 releases/
 *.zip
 *.tar.gz
-# Ignore unzipped extension source directory/files
+# Ignore unzipped extension source directory/files and external portfolio directory
 skippy-extension/
+portfolio-site/
+portfoliosite/
 # Explicitly track the extension installer required by the application
 !skippy_extension.zip
 

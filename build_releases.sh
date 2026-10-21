@@ -31,7 +31,7 @@ import os, sys, zipfile
 
 target_zip = sys.argv[1]
 items = sys.argv[2:]
-exclude_names = {"__pycache__", ".DS_Store", ".env", ".env.local", "skippy.db", "skippy.db-journal", "skippy.db-wal", "resume.md", "inbox.json", "test_venv", "venv", ".venv", ".git"}
+exclude_names = {"__pycache__", ".DS_Store", ".env", ".env.local", "skippy.db", "skippy.db-journal", "skippy.db-wal", "resume.md", "resumes.json", "inbox.json", "test_venv", "venv", ".venv", ".git", "portfolio-site", "portfoliosite"}
 
 with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
     for item in items:
@@ -85,8 +85,8 @@ else
 fi
 
 # 5. Core application files required for all target platforms
-# Includes all application logic (including pipeline.py), prompts, configuration templates, and pages.
-COMMON_FILES="app.py database.py evaluator.py pipeline.py scraper.py utils.py webhook.py requirements.txt custom_prompt.txt prompt_presets.json README.md .env.example skippy_extension.zip pages/"
+# Includes all application logic (including pipeline.py and posting_guard.py), prompts, configuration templates, and pages.
+COMMON_FILES="app.py database.py evaluator.py pipeline.py posting_guard.py scraper.py utils.py webhook.py requirements.txt custom_prompt.txt prompt_presets.json README.md .env.example skippy_extension.zip pages/"
 
 # 6. Pre-flight check: Verify all required core files exist
 echo "🔍 Verifying required application files..."
@@ -123,6 +123,7 @@ EXCLUDES=(
     -x "*.db-shm"
     -x "*.sqlite*"
     -x "resume.md"
+    -x "resumes.json"
     -x "*.docx"
     -x "*.pdf"
     -x "inbox.json"
@@ -135,6 +136,8 @@ EXCLUDES=(
     -x "venv/*"
     -x ".venv/*"
     -x ".git/*"
+    -x "portfolio-site/*"
+    -x "portfoliosite/*"
 )
 
 # 7. Package 1: Windows (Native Portable Installer)

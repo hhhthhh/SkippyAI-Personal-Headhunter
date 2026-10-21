@@ -34,51 +34,69 @@ if os.path.exists(INBOX_FILE):
     except OSError:
         pass
 
-def load_inbox_jobs() -> list[dict]:
-    """Thread-safe loader for inbox.json."""
-    with _inbox_lock:
-        if not os.path.exists(INBOX_FILE):
-            return []
-        try:
-            with open(INBOX_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, list) else []
-        except (json.JSONDecodeError, OSError):
-            return []
+def _read_inbox_unlocked() -> list[dict]:
+    if not os.path.exists(INBOX_FILE):
+        return []
+    try:
+        with open(INBOX_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
 
-def save_inbox_jobs(jobs: list[dict]):
-    """Thread-safe, atomic writer for inbox.json with owner-only permissions."""
-    with _inbox_lock:
-        tmp_file = f"{INBOX_FILE}.tmp"
+
+def _write_inbox_unlocked(jobs: list[dict]):
+    tmp_file = f"{INBOX_FILE}.tmp"
+    try:
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(jobs, f, indent=4)
         try:
-            with open(tmp_file, "w", encoding="utf-8") as f:
+            os.chmod(tmp_file, 0o600)
+        except OSError:
+            pass
+        try:
+            os.replace(tmp_file, INBOX_FILE)
+        except OSError:
+            # Fallback for Docker single-file bind mounts (Errno 16: Device or resource busy)
+            with open(INBOX_FILE, "w", encoding="utf-8") as f:
                 json.dump(jobs, f, indent=4)
             try:
-                os.chmod(tmp_file, 0o600)
+                os.chmod(INBOX_FILE, 0o600)
             except OSError:
                 pass
-            try:
-                os.replace(tmp_file, INBOX_FILE)
-            except OSError:
-                # Fallback for Docker single-file bind mounts (Errno 16: Device or resource busy)
-                with open(INBOX_FILE, "w", encoding="utf-8") as f:
-                    json.dump(jobs, f, indent=4)
-                try:
-                    os.chmod(INBOX_FILE, 0o600)
-                except OSError:
-                    pass
-                if os.path.exists(tmp_file):
-                    try:
-                        os.remove(tmp_file)
-                    except OSError:
-                        pass
-        except Exception as e:
             if os.path.exists(tmp_file):
                 try:
                     os.remove(tmp_file)
                 except OSError:
                     pass
-            raise e
+    except Exception as e:
+        if os.path.exists(tmp_file):
+            try:
+                os.remove(tmp_file)
+            except OSError:
+                pass
+        raise e
+
+
+def load_inbox_jobs() -> list[dict]:
+    """Thread-safe loader for inbox.json."""
+    with _inbox_lock:
+        return _read_inbox_unlocked()
+
+
+def save_inbox_jobs(jobs: list[dict]):
+    """Thread-safe, atomic writer for inbox.json with owner-only permissions."""
+    with _inbox_lock:
+        _write_inbox_unlocked(jobs)
+
+
+def remove_inbox_job_by_url(url: str):
+    """Atomically removes a job matching `url` from inbox.json while holding _inbox_lock."""
+    with _inbox_lock:
+        current = _read_inbox_unlocked()
+        updated = [j for j in current if j.get("url") != url]
+        if len(updated) != len(current):
+            _write_inbox_unlocked(updated)
 
 def clear_inbox():
     """Thread-safe removal of inbox.json."""
@@ -108,17 +126,17 @@ async def ingest_job(job: JobPayload):
     if not (clean_url.startswith("http://") or clean_url.startswith("https://")):
         raise HTTPException(status_code=400, detail="Invalid URL: Only HTTP and HTTPS schemes are supported.")
 
-    jobs = load_inbox_jobs()
-    if len(jobs) >= MAX_INBOX_SIZE:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Inbox queue capacity reached ({MAX_INBOX_SIZE} jobs). Please evaluate or clear pending jobs in Skippy."
-        )
-
-    payload_dict = job.model_dump()
-    payload_dict["url"] = clean_url
-    jobs.append(payload_dict)
-    save_inbox_jobs(jobs)
+    with _inbox_lock:
+        jobs = _read_inbox_unlocked()
+        if len(jobs) >= MAX_INBOX_SIZE:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Inbox queue capacity reached ({MAX_INBOX_SIZE} jobs). Please evaluate or clear pending jobs in Skippy."
+            )
+        payload_dict = job.model_dump()
+        payload_dict["url"] = clean_url
+        jobs.append(payload_dict)
+        _write_inbox_unlocked(jobs)
     
     return {"status": "success", "message": "Job added to inbox"}
 

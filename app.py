@@ -24,8 +24,9 @@ enforce_onboarding()
 # 4. Router Navigation
 pages = [
     st.Page("pages/1_scraper.py", title="Scraper", icon="🔍"),
-    st.Page("pages/5_linkedin.py", title="LinkedIn Evaluator", icon="🔗"),
+    st.Page("pages/5_linkedin.py", title="LinkedIn Evaluator (Fallback)", icon="🔗"),
     st.Page("pages/2_history.py", title="History", icon="📁"),
+    st.Page("pages/6_gallery.py", title="Document Gallery", icon="🖼️"),
     st.Page("pages/3_metrics.py", title="Metrics", icon="📊"),
     st.Page("pages/4_editors.py", title="Editors", icon="⚙️"),
     st.Page("pages/0_about.py", title="About", icon="👋")

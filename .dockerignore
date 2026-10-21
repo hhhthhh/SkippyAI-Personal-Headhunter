@@ -26,6 +26,8 @@ releases/
 *.zip
 *.tar.gz
 skippy-extension/
+portfolio-site/
+portfoliosite/
 !skippy_extension.zip
 
 # ------------------------------------------------------------------------------
@@ -62,8 +64,9 @@ skippy.db
 *.sqlite3
 *.sqlite
 
-# User's private resume and generated application documents
+# User's private resume, multi-resume vault, and generated application documents
 resume.md
+resumes.json
 *.docx
 *.pdf
 

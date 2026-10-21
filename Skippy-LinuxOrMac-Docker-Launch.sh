@@ -59,13 +59,16 @@ fi
 
 # 4. Pre-create persistence files so Docker won't mount them as directories
 touch skippy.db .env resume.md custom_prompt.txt 2>/dev/null || true
+if [ ! -s resumes.json ]; then
+    echo "{}" > resumes.json 2>/dev/null || true
+fi
 if [ ! -s inbox.json ]; then
     echo "[]" > inbox.json 2>/dev/null || true
 fi
 if [ ! -s prompt_presets.json ]; then
     echo "{}" > prompt_presets.json 2>/dev/null || true
 fi
-chmod 600 skippy.db .env resume.md inbox.json 2>/dev/null || true
+chmod 600 skippy.db .env resume.md resumes.json inbox.json 2>/dev/null || true
 
 echo "🚀 Building and starting the Skippy container..."
 $DOCKER_COMPOSE up -d --build

@@ -17,6 +17,7 @@ services:
       - ./skippy.db:/app/skippy.db
       - ./.env:/app/.env
       - ./resume.md:/app/resume.md
+      - ./resumes.json:/app/resumes.json
       - ./custom_prompt.txt:/app/custom_prompt.txt
       - ./prompt_presets.json:/app/prompt_presets.json
       - ./inbox.json:/app/inbox.json

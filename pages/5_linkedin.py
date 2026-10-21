@@ -12,7 +12,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import database as db
 from evaluator import evaluate_job
-from utils import render_completion_card, check_and_handle_pipeline_completion
+from utils import (
+    render_completion_card,
+    check_and_handle_pipeline_completion,
+    render_resume_selector,
+    combine_selected_resumes,
+)
 
 from webhook import load_inbox_jobs, save_inbox_jobs, clear_inbox
 from pipeline import pipeline_manager
@@ -24,8 +29,17 @@ def is_backend_live(port=WEBHOOK_PORT):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
-st.title("🔗 LinkedIn Integration")
-st.markdown("Manage and evaluate jobs sent directly from the LinkedIn browser extension.")
+st.title("🔗 LinkedIn Evaluator (Fallback)")
+col_desc, col_back = st.columns([4, 1.4])
+with col_desc:
+    st.markdown(
+        "**Browser Extension Fallback:** Skippy's primary **🔍 Scraper → Native Job Board Search** now searches and scrapes LinkedIn directly without an account. "
+        "Use this extension queue as a reliable fallback if LinkedIn rate-limits automated guest scraping or when you prefer 1-click capture while browsing LinkedIn logged-in."
+    )
+with col_back:
+    if st.button("⬅️ Back to Scraper", use_container_width=True):
+        st.switch_page("pages/1_scraper.py")
+render_resume_selector(key_suffix="linkedin_page", in_sidebar=False)
 st.markdown("---")
 
 # Accessible Completion Card displayed if a run just completed
@@ -92,16 +106,20 @@ def render_auto_inbox():
             st.button("⚙️ Evaluation Running in Background...", disabled=True, use_container_width=True)
         else:
             if st.button("🚀 Evaluate All Inbox Jobs", type="primary", use_container_width=True):
+                chosen_resumes = st.session_state.get("selected_resumes", ["Master Resume"])
+                combined_resume = combine_selected_resumes(chosen_resumes)
+                st.session_state.resume_text = combined_resume
                 started = pipeline_manager.start_inbox_pipeline(
                     pending_jobs=pending_jobs,
-                    resume_text=st.session_state.resume_text,
+                    resume_text=combined_resume,
                     system_instructions=st.session_state.system_instructions,
                     model_choice=st.session_state.get("model_choice", "Google Gemini"),
                     api_key=st.session_state.get("user_api_key", ""),
                     local_base_url=st.session_state.get("local_base_url", ""),
                     local_model_name=st.session_state.get("local_model_name", ""),
                     model_override=st.session_state.get("model_override", ""),
-                    source="LinkedIn"
+                    source="LinkedIn",
+                    matched_resumes=", ".join(chosen_resumes),
                 )
                 if started:
                     if "completion_batch" in st.session_state:

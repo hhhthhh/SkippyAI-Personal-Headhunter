@@ -1,28 +1,25 @@
 import streamlit as st
 from utils import setup_sidebar, enforce_onboarding
 
-st.title("🦘 Skippy: AI Headhunter")
+st.title("🦘 Skippy: AI Job Search & Career CRM")
 st.markdown("---")
 st.markdown("### Architecture & Design")
 st.write(
-    "Skippy is a local-first, Multi-Page Application designed to automate the job search workflow. "
-    "It leverages event-driven web scraping and multiple LLM APIs to evaluate role alignment, "
-    "identify skill gaps, and dynamically tailor application documents."
+    "Skippy is a 100% free, local-first Multi-Page AI Job Search & Career CRM. "
+    "It combines unauthenticated job board search APIs, deterministic prompt-injection defense, "
+    "multi-dimensional candidate scoring, a two-pass Drafter–Reviewer grounding engine, and "
+    "automated market skill-gap intelligence."
 )
 
 st.markdown("### Technical Highlights")
 st.markdown(
-    "- **Core:** Python, Streamlit, SQLite\n"
-    "- **Data Extraction:** Playwright (with `domcontentloaded` bypass for SPA job boards)\n"
-    "- **AI Backend:** Google Gemini, OpenAI, Anthropic, or Local Ollama\n"
-    "- **Security:** Credentials isolated in `.env`; XML-delimited prompt defenses against injection."
-)
-
-st.markdown("### 🌐 Supported Job Sites")
-st.markdown(
-    "- **Built In (`builtin.com`):** Officially supported and verified for automated searching and batch scraping\n"
-    "- **LinkedIn Extension:** Ingest jobs directly from your browser session in 1 click\n"
-    "- **Direct Fallback:** Paste a Job Description mode for all other career portals"
+    "- **Core Stack:** Python, Streamlit, SQLite (WAL concurrency), Pydantic, python-docx\n"
+    "- **Multi-Source Job Discovery:** Native LinkedIn Public Guest Search, FreeHire Global Tech API (with ghost-job/repost detection), Built In (`builtin.com`), and lazy Playwright SPA fallback\n"
+    "- **AI Backend (Bring Your Own Key or Free Local):** Google Gemini (free tier supported), OpenAI, Anthropic, xAI Grok, or Local Ollama\n"
+    "- **4-Pillar Weighted Scoring & Gates:** Deterministic `30% Technical + 25% Experience + 15% Behavioral + 30% Career Alignment` rubric with explicit Eligibility & Location gates\n"
+    "- **2-Step Drafter–Reviewer & ATS Audit:** Cross-checks tailored resumes and cover letters against your Master Resume to eliminate hallucinations, normalize ASCII dates, and verify ATS keyword coverage\n"
+    "- **Full Application Suite:** Tailored Resumes, Cover Letters, Character-Counted Application Portal Q&A Packs, Stage-Aware Interview Prep (with Honest Gap Bridges), Follow-Up Notes, and Personalized Upskill Roadmaps\n"
+    "- **Security (`posting_guard.py`):** Deterministic HTML/CSS hidden-element stripping, zero-width & bidirectional Unicode sanitization, homoglyph detection, SSRF per-hop redirect validation, and XML-delimited prompt boundaries"
 )
 
 st.markdown("---")
