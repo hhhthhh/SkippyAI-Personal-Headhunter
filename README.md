@@ -206,7 +206,7 @@ Right inside your Skippy folder! Your jobs live in `skippy.db` (a standard SQLit
 
 ## 👨‍💻 Created By
 
-Developed with care by **Hayden Tanaka**  
+Developed by **Hayden Tanaka**  
 *B.S. Cyber Intelligence and Security, Embry-Riddle Aeronautical University*
 
 Enjoying Skippy? Star the repository and share it with friends who are tackling the job hunt!
