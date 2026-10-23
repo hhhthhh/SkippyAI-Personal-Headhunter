@@ -23,11 +23,16 @@ Think of Skippy as your smart, personal assistant that lives directly on your co
 
 | Feature | What it does | Why it's awesome |
 | :--- | :--- | :--- |
-| 🎯 **Smart Match Scoring** | Grades job fit from 0 to 100 based on your real experience. | You immediately know which jobs are worth your time. |
-| 🛑 **Dealbreaker Spotter** | Flags missing clearances, mandatory licenses, or hard blockers. | Keeps you from spending an hour applying for a job that requires a Top Secret clearance. |
-| 📄 **1-Click Document Generator** | Creates custom Resumes, Cover Letters, and Interview Prep sheets. | Download ready-to-use Microsoft Word (`.docx`) files with one click. |
-| 🔗 **LinkedIn Browser Extension** | Right-click any job on LinkedIn and send it straight into Skippy. | No more tedious copy-pasting between tabs. |
-| 📊 **Skill Insights & Analytics** | Visual charts showing what skills employers are asking for most. | See exactly what skills you should learn next to level up your resume. |
+| 🎯 **Smart Score Matching** | Evaluates roles across Technical Skills (30%), Experience Match (25%), Behavioral Fit (15%), and Career Alignment (30%). | Delivers an objective, holistic 0–100 score instead of a generic keyword count. |
+| 🔎 **Native Job Board Search** | Search **LinkedIn** (guest mode) and **FreeHire** directly inside Skippy without an account or API key. | Find and evaluate hundreds of roles in seconds. |
+| 🛑 **Dealbreaker & Red Flag Spotter** | Categorizes non-negotioables like security clearances, mandatory licenses, relocations, or on-call rotations. | Keeps you from wasting time applying to roles with tough barriers-to-entry. |
+| 🌊 **Interactive Sankey Funnel** | Visualizes your entire pipeline from evaluation and application to interviews and job offers. | Track drop-offs, flag ghosted/stale postings, and advance active interview stages with 1 click. |
+| 📄 **Tailored ATS Resumes & Portfolios** | Generates tailored resumes, cover letters, STAR interview prep guides, and portal Q&A packs. | Download ready-to-use ATS-optimized Word (`.docx`) and PDF (`.pdf`) documents. |
+| 🛡️ **Drafter–Reviewer Fact Audits** | Automated secondary AI audit checks generated documents against your real resume. | Eliminates hallucinations and verifies factual truth before you submit applications. |
+| 🗄️ **Multi-Resume Vault** | Upload and manage multiple specialized resumes (`.docx`, `.pdf`, `.md`, `.txt`). | Target different career tracks (e.g. SOC Analyst vs. Cloud Security Engineer) with ease. |
+| 🎓 **Actionable Upskill Roadmaps** | Prioritizes recurring skill gaps across near-fit roles (Score ≥ 45) into study plans. | Unlocks step-by-step roadmaps, portfolio bridge projects, and 100% free study resources. |
+| 🛡️ **Posting Guard Sanitization** | Deterministically strips prompt injections, hidden HTML, and invisible Unicode traps. | Keeps your AI evaluation reliable and secure against adversarial web postings. |
+| 🔗 **LinkedIn Browser Extension** | Right-click any job on LinkedIn to capture and queue it directly into Skippy. | Flexible extension fallback for 1-click capture while browsing logged in. |
 | 🤖 **Pick Your Favorite AI** | Works with Google Gemini, OpenAI (ChatGPT), Anthropic (Claude), xAI (Grok), or Ollama. | You choose the AI you prefer—or run 100% offline and free with Ollama! |
 
 ---
@@ -115,35 +120,59 @@ Don't worry about keeping it under one page! Skippy will pick and choose the bes
 Once you finish onboarding, you'll see all of Skippy's tools in the left sidebar:
 
 ### 1. 🔍 Scraper
-Your command center for feeding job descriptions to the AI:
-- **Paste a Job Description:** Found a cool job on a company website or job board? Copy the job posting text, paste it here, and hit Evaluate.
-- **Multi-URL Posting:** Have a list of direct job links from supported sites? Drop them in to evaluate them back-to-back.
-- **Universal Search:** Search verified tech boards like Built In (`builtin.com`) by role title and location to scrape and score multiple jobs in a batch!
+Your command center for sourcing and feeding job descriptions to the AI:
+- **🔎 Native Job Board Search (No Login Required):** Search live postings on **LinkedIn** (public guest endpoint) and **FreeHire** (global tech aggregator) by role, location, workplace type (Remote, Hybrid, On-site), and recency.
+- **📝 Paste a Job Description:** Copy and paste raw job posting text from any job board. Protected automatically by **Posting Guard** against prompt-injections, invisible Unicode tampering, and hidden text blocks.
+- **🔗 Multi-URL Search:** Paste direct job links from supported sites (LinkedIn, Built In) to evaluate them back-to-back.
+- **🧭 Universal Search:** Quick-fill category presets for Built In (Cybersecurity, Software Engineering, Cloud & DevOps).
 
-### 2. 🔗 LinkedIn Evaluator (Superpower!)
-Browse jobs on LinkedIn like you normally do, and send them straight into Skippy with one click:
-- Check out the **Connect the LinkedIn Extension** box on this page to download the helper extension.
-- Jobs you send will line up in your inbox ready to be evaluated in bulk!
+### 2. 📋 Scraper Results
+A dedicated curation and review hub for discovered postings:
+- **Interactive Results Table:** Filter discovered jobs by company, role, workplace type, and status (`new`, `seen`, `evaluated`).
+- **Batch Evaluation:** Select multiple jobs or evaluate the top new postings with 1 click.
+- **Mark as Seen:** Automatically or manually mark postings as seen so subsequent searches never re-evaluate duplicates.
 
-### 3. 📁 History & Document Gallery
-Every job you evaluate is saved here permanently in your local database (`skippy.db`):
-- **Overview Table:** See positions, scores, application status, and dates at a glance.
-- **Status Badges:** Tag jobs as *Not Applied*, *Applied*, *Interviewing*, *Waitlisted*, *Rejected*, or *Offer*.
-- **Generate Custom Materials:** Click into any job to generate:
-  - 📝 **Tailored Resume:** Rewrites your bullet points to emphasize what that employer cares about.
-  - ✉️ **Cover Letter:** A friendly, authentic letter explaining why you're a great fit.
-  - 🎤 **Interview Prep:** Gives you practice questions using the proven **STAR method** (Situation, Task, Action, Result) so you ace your interview.
-  - 💾 **Download Word Docs:** Click **Download (.docx)** to save real Word files straight to your computer!
+### 3. 🔗 LinkedIn Evaluator (Fallback Queue)
+Browse LinkedIn with Skippy's browser extension while logged into your account:
+- Right-click any posting on LinkedIn and choose **⚡ Send Listing to Skippy**.
+- Captured postings line up in your queue ready for bulk AI evaluation with 1 click.
 
-### 4. 📊 Metrics
-Visual graphs showing:
-- **Skills That Shine:** The skills you have that employers want the most.
-- **In-Demand Gaps:** The top skills mentioned in job postings that aren't on your resume yet. (A cheat sheet of what you should learn next!)
-- **Common Red Flags:** Frequent warnings spotted across job postings.
+### 4. 📁 History
+Your persistent job search archive stored locally in `skippy.db`:
+- **Daily Grouped Postings:** Postings are neatly organized by calendar day (*Today*, *Yesterday*, or earlier) for fast review.
+- **Multi-Dimensional Rubric:** View detailed breakdowns across Technical Skills (30%), Experience Match (25%), Behavioral Fit (15%), and Career Alignment (30%).
+- **Generate Tailored Documents:** Click into any job to produce:
+  - 📝 **Tailored ATS Resume:** Re-targets your bullet points to match the employer's specific tech stack and requirements.
+  - ✉️ **Custom Cover Letter:** An authentic, professional narrative highlighting your genuine accomplishments.
+  - 🎤 **STAR Interview Prep:** Custom behavioral and technical practice questions using the proven Situation, Task, Action, Result framework.
+  - 📋 **Application Q&A Pack:** Ready-to-copy answers to tricky portal screening questions.
+  - 📬 **Follow-Up Note:** Professional outreach messages to recruiters and hiring managers.
+- **🛡️ Drafter–Reviewer Fact Audit:** Run a secondary verification pass that audits generated documents against your real resume to guarantee zero factual hallucinations.
 
-### 5. ⚙️ Editors
-- **Edit Master Resume:** Add new accomplishments, projects, or degrees whenever you want.
-- **Edit System Prompts:** Fine-tune how strict or forgiving the AI is when scoring jobs.
+### 5. 🖼️ Document Gallery
+A dedicated centralized hub to manage all generated career documents:
+- **Filter & Search:** Filter by job title, company name, document type, or alignment score.
+- **In-App Markdown Editor:** Live edit and fine-tune your materials with real-time saving to the database.
+- **Dual Format Downloads:** Export ready-to-send documents as stylized Word files (`.docx`) or pixel-perfect, ATS-compliant PDFs (`.pdf`).
+
+### 6. 🌊 Application Funnel (Sankey)
+A dedicated pipeline conversion visualizer:
+- **Interactive Sankey Diagram:** Visualizes your entire pipeline from initial discovery and evaluation to screening, active interviews, and offers received. Nodes can be dragged to customize layout.
+- **Conversion KPI Badges:** Tracks Active in Pipeline count, Application Rate, Screen/Interview Rate, and Offer Conversion Rate.
+- **Stale Threshold Slider:** Set customizable staleness timers (7–30 days) to automatically flag stalled applications in *Ghosted / Stale*.
+- **Stage Explorer & Status Manager:** Inspect roles in any stage and advance applications with 1 click (*"👉 Heard back: Interview ➔"*).
+
+### 7. 📊 Metrics
+Comprehensive market intelligence and upskill guidance:
+- **Market & Skill Intelligence:** Aggregates top matching skills across postings, highlights the most common missing skill gaps, and clusters recurring red flag themes (such as on-call rotations, security clearance requirements, or hybrid relocation gates).
+- **🎓 Actionable Upskill & Learning Plan Generator:** Weights skill gaps across near-fit roles (Score ≥ 45) and generates a personalized, step-by-step study roadmap complete with bridge portfolio projects, 100% free study resources, and downloadable `.docx` study plans.
+
+### 8. ⚙️ Resume and Prompts
+- **Multi-Resume Vault:** Upload, store, and manage multiple resume profiles (`.docx`, `.pdf`, `.md`, `.txt`). Use the live split-view ATS preview to inspect formatting in real time.
+- **Prompt Preset Manager:** Customize and switch evaluation system instructions and prompt presets.
+
+### 9. 👋 About
+Application documentation, security overview, and quick-reference guides.
 
 ---
 
@@ -188,8 +217,8 @@ Skippy itself is 100% free and open-source! If you use Google Gemini's free tier
 </details>
 
 <details>
-<summary><b>Can I edit the documents after Skippy generates them?</b></summary>
-Yes! When you click download, Skippy saves them as standard Microsoft Word (`.docx`) files. You can open them in Microsoft Word, Google Docs, Apple Pages, or LibreOffice and make whatever edits you like.
+<summary><b>Can I edit and download documents as PDF as well as Word?</b></summary>
+Yes! You can edit generated documents right inside Skippy using the built-in markdown editor in the <b>Document Gallery</b> and <b>History</b>. You can then download them as standard Microsoft Word (<code>.docx</code>) documents or pixel-perfect, ATS-compliant PDFs (<code>.pdf</code>).
 </details>
 
 <details>
@@ -199,7 +228,7 @@ If a role receives a 0 score, check the "Disqualification Reason" card. It usual
 
 <details>
 <summary><b>Where are my saved jobs and resumes stored?</b></summary>
-Right inside your Skippy folder! Your jobs live in `skippy.db` (a standard SQLite database file), your resume lives in `resume.md`, and your settings live in `.env`.
+Right inside your Skippy folder! Your jobs live in <code>skippy.db</code> (a local SQLite database file with WAL journal mode), your multi-resume vault lives in <code>resumes.json</code> (with your initial resume in <code>resume.md</code>), and your local settings live in <code>.env</code>.
 </details>
 
 ---
