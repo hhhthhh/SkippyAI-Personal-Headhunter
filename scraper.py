@@ -387,10 +387,15 @@ def search_linkedin_guest(
     jobage_days: int = 0,
     page: int = 1,
     limit: int = 25,
+    evaluated_ids: Optional[set] = None,
+    seen_ids: Optional[set] = None,
+    max_search_pages: int = 10,
 ) -> List[Dict[str, Any]]:
     """
     Searches live LinkedIn job postings using the unauthenticated jobs-guest endpoint.
-    No login or API key required.
+    Pages through search results until `limit` NEW (unevaluated, unseen) postings are
+    discovered or `max_search_pages` is reached. Returns all encountered postings
+    tagged with their respective status ('evaluated', 'seen', 'new').
     """
     work_type_map = {
         "remote": "2",
@@ -401,12 +406,15 @@ def search_linkedin_guest(
     wt = work_type_map.get((remote or "").strip().lower())
     tpr = f"r{int(jobage_days) * 86400}" if jobage_days and int(jobage_days) > 0 else None
 
+    target_new = max(1, int(limit))
+    new_count = 0
     collected: List[Dict[str, Any]] = []
-    seen_ids = set()
+    seen_in_batch = set()
     current_page = max(1, int(page))
-    max_pages = max(1, (limit + 9) // 10)
+    eval_set = evaluated_ids or set()
+    seen_set = seen_ids or set()
 
-    for _ in range(max_pages):
+    for _ in range(max_search_pages):
         params: Dict[str, str] = {}
         if query and query.strip():
             params["keywords"] = query.strip()
@@ -425,11 +433,26 @@ def search_linkedin_guest(
             break
 
         for card in cards:
-            if card["id"] not in seen_ids:
-                seen_ids.add(card["id"])
+            cid = card["id"]
+            if cid not in seen_in_batch:
+                seen_in_batch.add(cid)
+                if cid in eval_set:
+                    status = "evaluated"
+                elif cid in seen_set:
+                    status = "seen"
+                else:
+                    status = "new"
+
+                card["status"] = status
+                card["is_evaluated"] = (status == "evaluated")
+                card["is_seen"] = (status == "seen")
+                card["is_new"] = (status == "new")
                 collected.append(card)
-                if len(collected) >= limit:
-                    return collected
+
+                if status == "new":
+                    new_count += 1
+                    if new_count >= target_new:
+                        return collected
 
         if len(cards) < 10:
             break
@@ -462,124 +485,170 @@ def search_freehire_jobs(
     jobage_days: int = 0,
     page: int = 1,
     limit: int = 25,
+    evaluated_ids: Optional[set] = None,
+    seen_ids: Optional[set] = None,
+    max_search_pages: int = 10,
 ) -> List[Dict[str, Any]]:
     """
     Searches tech job postings via the free, unauthenticated FreeHire REST API
     (https://freehire.me/api/v1/agent/jobs/search).
     Returns full descriptions directly in the search response for instant evaluation.
+    Pages through search results until `limit` NEW postings are discovered or
+    `max_search_pages` is reached. Returns all encountered postings tagged with
+    their respective status ('evaluated', 'seen', 'new').
     """
     base_url = FREEHIRE_BASE_URL.rstrip("/")
-    params: List[Tuple[str, str]] = []
-    if query and query.strip():
-        params.append(("q", query.strip()))
-    params.append(("limit", str(max(1, min(limit, 50)))))
-    params.append(("offset", str(max(0, (page - 1) * limit))))
-    params.append(("description_format", "text"))
+    target_new = max(1, int(limit))
+    page_size = min(50, max(1, int(limit)))
+    current_offset = max(0, (page - 1) * limit)
+    new_count = 0
+    collected: List[Dict[str, Any]] = []
+    seen_in_batch = set()
+    eval_set = evaluated_ids or set()
+    seen_set = seen_ids or set()
 
-    if jobage_days and int(jobage_days) > 0:
-        params.append(("posted_within_days", str(int(jobage_days))))
-    if work_mode and work_mode.strip().lower() in ("remote", "hybrid", "onsite"):
-        params.append(("work_mode", work_mode.strip().lower()))
-    if region and region.strip().lower() in FREEHIRE_REGION_VALUES:
-        params.append(("regions", region.strip().lower()))
-    if country and country.strip():
-        params.append(("countries", country.strip().upper()))
-    if seniority and seniority.strip().lower() not in ("", "any"):
-        params.append(("seniority", seniority.strip().lower()))
+    for _ in range(max_search_pages):
+        params: List[Tuple[str, str]] = []
+        if query and query.strip():
+            params.append(("q", query.strip()))
+        params.append(("limit", str(page_size)))
+        params.append(("offset", str(current_offset)))
+        params.append(("description_format", "text"))
 
-    url = f"{base_url}{FREEHIRE_AGENT_SEARCH_PATH}?{urlencode(params)}"
-    headers = {
-        "User-Agent": "SkippyJobSearch/1.0 (freehire-search)",
-        "Accept": "application/json",
-    }
+        if jobage_days and int(jobage_days) > 0:
+            params.append(("posted_within_days", str(int(jobage_days))))
+        if work_mode and work_mode.strip().lower() in ("remote", "hybrid", "onsite"):
+            params.append(("work_mode", work_mode.strip().lower()))
+        if region and region.strip().lower() in FREEHIRE_REGION_VALUES:
+            params.append(("regions", region.strip().lower()))
+        if country and country.strip():
+            params.append(("countries", country.strip().upper()))
+        if seniority and seniority.strip().lower() not in ("", "any"):
+            params.append(("seniority", seniority.strip().lower()))
 
-    delay = 0.5
-    payload = None
-    for attempt in range(4):
-        resp = _http_get(url, headers=headers, timeout=15)
-        if resp.status_code == 429 or resp.status_code >= 500:
-            if attempt == 3:
-                raise RuntimeError(f"FreeHire API rate-limited or unavailable (HTTP {resp.status_code}).")
-            time.sleep(delay + random.uniform(0.0, 0.3))
-            delay = min(delay * 2, 5.0)
-            continue
-        resp.raise_for_status()
-        payload = resp.json()
-        break
+        url = f"{base_url}{FREEHIRE_AGENT_SEARCH_PATH}?{urlencode(params)}"
+        headers = {
+            "User-Agent": "SkippyJobSearch/1.0 (freehire-search)",
+            "Accept": "application/json",
+        }
 
-    if not payload or not isinstance(payload, dict):
-        return []
+        delay = 0.5
+        payload = None
+        for attempt in range(4):
+            resp = _http_get(url, headers=headers, timeout=15)
+            if resp.status_code == 429 or resp.status_code >= 500:
+                if attempt == 3:
+                    raise RuntimeError(f"FreeHire API rate-limited or unavailable (HTTP {resp.status_code}).")
+                time.sleep(delay + random.uniform(0.0, 0.3))
+                delay = min(delay * 2, 5.0)
+                continue
+            resp.raise_for_status()
+            payload = resp.json()
+            break
 
-    raw_jobs = payload.get("data") or []
-    results: List[Dict[str, Any]] = []
-    for item in raw_jobs:
-        if not isinstance(item, dict):
-            continue
-        title = html.unescape(item.get("title") or "").strip() or "(Untitled Role)"
-        company = (item.get("company") or "Unknown Company").strip()
-        location = (item.get("location") or "").strip()
-        posted_at = (item.get("posted_at") or "")[:10]
-        job_url = (item.get("url") or "").strip()
-        slug = (item.get("public_slug") or "").strip()
-        if not job_url and slug:
-            job_url = f"{base_url}/jobs/{slug}"
+        if not payload or not isinstance(payload, dict):
+            break
 
-        enrichment = item.get("enrichment") or {}
-        salary_str = _format_freehire_salary(enrichment)
-        sen = enrichment.get("seniority") or ""
-        emp_type = enrichment.get("employment_type") or ""
-        w_mode = item.get("work_mode") or ""
-        skills_list = item.get("skills") or []
+        raw_jobs = payload.get("data") or []
+        if not raw_jobs:
+            break
 
-        raw_desc = item.get("description") or ""
-        cleaned_desc, guard_findings = run_posting_guard(raw_desc, mode="auto")
-        security_flags = list(guard_findings.get("security_flags") or [])
+        for item in raw_jobs:
+            if not isinstance(item, dict):
+                continue
+            title = html.unescape(item.get("title") or "").strip() or "(Untitled Role)"
+            company = (item.get("company") or "Unknown Company").strip()
+            location = (item.get("location") or "").strip()
+            posted_at = (item.get("posted_at") or "")[:10]
+            job_url = (item.get("url") or "").strip()
+            slug = (item.get("public_slug") or "").strip()
+            if not job_url and slug:
+                job_url = f"{base_url}/jobs/{slug}"
 
-        reality = item.get("reality") or {}
-        if item.get("closed_at"):
-            security_flags.append("⚠️ Posting Status: FreeHire indicates this job listing is CLOSED.")
-        elif reality.get("fake_freshness"):
-            repost_cnt = reality.get("repost_count", 1)
-            security_flags.append(
-                f"⚠️ Repost / Ghost Job Notice: Flagged for fake freshness (reposted {repost_cnt} times)."
-            )
+            norm_url = job_url.split("?")[0].split("#")[0].rstrip("/").lower() if job_url else ""
+            job_key = slug or norm_url or title
 
-        header_lines = [
-            f"Job Title: {title}",
-            f"Company: {company}",
-            f"Location: {location or 'Unspecified'}",
-        ]
-        if w_mode:
-            header_lines.append(f"Workplace Mode: {w_mode}")
-        if sen:
-            header_lines.append(f"Seniority: {sen}")
-        if emp_type:
-            header_lines.append(f"Employment Type: {emp_type}")
-        if salary_str:
-            header_lines.append(f"Salary: {salary_str}")
-        if skills_list:
-            header_lines.append(f"Listed Skills: {', '.join(str(s) for s in skills_list)}")
-        header_lines.append("")
-        header_lines.append(cleaned_desc or "(No description text provided)")
+            if job_key in seen_in_batch:
+                continue
+            seen_in_batch.add(job_key)
 
-        results.append({
-            "id": slug or job_url,
-            "title": title,
-            "company": company,
-            "location": location,
-            "date": posted_at,
-            "url": job_url,
-            "work_mode": w_mode,
-            "seniority": sen,
-            "salary": salary_str,
-            "skills": skills_list,
-            "description": cleaned_desc,
-            "raw_text": "\n".join(header_lines),
-            "security_flags": security_flags,
-            "source_board": "FreeHire",
-        })
+            if job_key in eval_set or norm_url in eval_set:
+                status = "evaluated"
+            elif job_key in seen_set or norm_url in seen_set:
+                status = "seen"
+            else:
+                status = "new"
 
-    return results
+            enrichment = item.get("enrichment") or {}
+            salary_str = _format_freehire_salary(enrichment)
+            sen = enrichment.get("seniority") or ""
+            emp_type = enrichment.get("employment_type") or ""
+            w_mode = item.get("work_mode") or ""
+            skills_list = item.get("skills") or []
+
+            raw_desc = item.get("description") or ""
+            cleaned_desc, guard_findings = run_posting_guard(raw_desc, mode="auto")
+            security_flags = list(guard_findings.get("security_flags") or [])
+
+            reality = item.get("reality") or {}
+            if item.get("closed_at"):
+                security_flags.append("⚠️ Posting Status: FreeHire indicates this job listing is CLOSED.")
+            elif reality.get("fake_freshness"):
+                repost_cnt = reality.get("repost_count", 1)
+                security_flags.append(
+                    f"⚠️ Repost / Ghost Job Notice: Flagged for fake freshness (reposted {repost_cnt} times)."
+                )
+
+            header_lines = [
+                f"Job Title: {title}",
+                f"Company: {company}",
+                f"Location: {location or 'Unspecified'}",
+            ]
+            if w_mode:
+                header_lines.append(f"Workplace Mode: {w_mode}")
+            if sen:
+                header_lines.append(f"Seniority: {sen}")
+            if emp_type:
+                header_lines.append(f"Employment Type: {emp_type}")
+            if salary_str:
+                header_lines.append(f"Salary: {salary_str}")
+            if skills_list:
+                header_lines.append(f"Listed Skills: {', '.join(str(s) for s in skills_list)}")
+            header_lines.append("")
+            header_lines.append(cleaned_desc or "(No description text provided)")
+
+            collected.append({
+                "id": slug or job_url,
+                "title": title,
+                "company": company,
+                "location": location,
+                "date": posted_at,
+                "url": job_url,
+                "work_mode": w_mode,
+                "seniority": sen,
+                "salary": salary_str,
+                "skills": skills_list,
+                "description": cleaned_desc,
+                "raw_text": "\n".join(header_lines),
+                "security_flags": security_flags,
+                "source_board": "FreeHire",
+                "status": status,
+                "is_evaluated": (status == "evaluated"),
+                "is_seen": (status == "seen"),
+                "is_new": (status == "new"),
+            })
+
+            if status == "new":
+                new_count += 1
+                if new_count >= target_new:
+                    return collected
+
+        if len(raw_jobs) < page_size:
+            break
+        current_offset += len(raw_jobs)
+        time.sleep(0.35)
+
+    return collected
 
 
 def _extract_guarded_text_from_html(html_content: str) -> Tuple[str, List[str]]:
@@ -691,17 +760,22 @@ def scrape_job_text(url: str, page: Page = None) -> str:
     return cleaned_text
 
 
+def _log_scraper_error(message: str):
+    """Outputs an error cleanly to Streamlit UI if in a request context, otherwise prints."""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        if get_script_run_ctx(suppress_warning=True) is not None:
+            st.error(message)
+            return
+    except Exception:
+        pass
+    print(f"[Scraper Error] {message}")
+
+
 def scrape_universal_search_results(search_url: str) -> list[str]:
     """Attempts to auto-discover job links from ANY job board search page with URL validation."""
     if not is_safe_url(search_url):
-        try:
-            from streamlit.runtime.scriptrunner import get_script_run_ctx
-            if get_script_run_ctx(suppress_warning=True) is not None:
-                st.error("Error: Disallowed or unsafe search URL. Only public HTTP/HTTPS URLs are allowed.")
-            else:
-                print(f"[Scraper Error] Disallowed or unsafe search URL: {search_url}")
-        except Exception:
-            print(f"[Scraper Error] Disallowed or unsafe search URL: {search_url}")
+        _log_scraper_error(f"Disallowed or unsafe search URL: {search_url}")
         return []
 
     job_urls = []
@@ -731,13 +805,6 @@ def scrape_universal_search_results(search_url: str) -> list[str]:
             job_urls = list(dict.fromkeys(job_urls))
             browser.close()
     except Exception as e:
-        try:
-            from streamlit.runtime.scriptrunner import get_script_run_ctx
-            if get_script_run_ctx(suppress_warning=True) is not None:
-                st.error(f"Error scraping search page: {str(e)}")
-            else:
-                print(f"[Scraper Error] Error scraping search page: {str(e)}")
-        except Exception:
-            print(f"[Scraper Error] Error scraping search page: {str(e)}")
+        _log_scraper_error(f"Error scraping search page: {str(e)}")
         
     return job_urls

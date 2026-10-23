@@ -6,17 +6,12 @@ import streamlit as st
 from dotenv import load_dotenv, set_key
 import streamlit.components.v1 as components
 from pipeline import pipeline_manager
+from auth import enforce_authentication, render_sidebar_auth_controls, logout_user
+
+from database import secure_file_permissions, atomic_write_text, atomic_write_json, set_env_var_safe
 
 ENV_FILE = ".env"
 RESUMES_FILE = "resumes.json"
-
-def secure_file_permissions(filepath: str):
-    """Restricts file permissions to user-read/write only (0600)."""
-    if os.path.exists(filepath):
-        try:
-            os.chmod(filepath, 0o600)
-        except OSError:
-            pass
 
 if not os.path.exists(ENV_FILE):
     try:
@@ -32,33 +27,7 @@ def load_local_config():
     return os.environ.get("USER_API_KEY", "")
 
 def save_local_config(api_key):
-    try:
-        set_key(ENV_FILE, "USER_API_KEY", api_key)
-    except OSError:
-        # Fallback for Docker single-file bind mounts where os.replace raises EBUSY (Errno 16)
-        lines = []
-        if os.path.exists(ENV_FILE):
-            try:
-                with open(ENV_FILE, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-            except OSError:
-                lines = []
-        escaped_val = api_key.replace("\\", "\\\\").replace("'", "\\'")
-        new_line = f"USER_API_KEY='{escaped_val}'\n"
-        updated = False
-        for i, line in enumerate(lines):
-            if line.lstrip().startswith("USER_API_KEY="):
-                lines[i] = new_line
-                updated = True
-                break
-        if not updated:
-            if lines and not lines[-1].endswith("\n"):
-                lines[-1] += "\n"
-            lines.append(new_line)
-        with open(ENV_FILE, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-    os.environ["USER_API_KEY"] = api_key
-    secure_file_permissions(ENV_FILE)
+    set_env_var_safe("USER_API_KEY", api_key, env_file=ENV_FILE)
 
 def render_help_content():
     st.markdown("**🔑 Acquiring API Keys**")
@@ -125,29 +94,13 @@ def load_resumes() -> dict[str, str]:
 def save_resumes(resumes_dict: dict[str, str]):
     """Persists the multi-resume dictionary to `resumes.json` (0600) and syncs the primary resume to `resume.md`."""
     clean_dict = {str(k).strip(): str(v) for k, v in resumes_dict.items() if str(k).strip()}
-    tmp_file = f"{RESUMES_FILE}.tmp"
-    with open(tmp_file, "w", encoding="utf-8") as f:
-        json.dump(clean_dict, f, indent=2)
-    secure_file_permissions(tmp_file)
-    try:
-        os.replace(tmp_file, RESUMES_FILE)
-    except OSError:
-        with open(RESUMES_FILE, "w", encoding="utf-8") as f:
-            json.dump(clean_dict, f, indent=2)
-        secure_file_permissions(RESUMES_FILE)
-        if os.path.exists(tmp_file):
-            try:
-                os.remove(tmp_file)
-            except OSError:
-                pass
+    atomic_write_json(RESUMES_FILE, clean_dict, indent=2)
 
     # Keep resume.md synced with the first resume for backward compatibility
     if clean_dict:
         first_val = next(iter(clean_dict.values()))
         try:
-            with open("resume.md", "w", encoding="utf-8") as f:
-                f.write(first_val)
-            secure_file_permissions("resume.md")
+            atomic_write_text("resume.md", first_val)
         except OSError:
             pass
 
@@ -289,9 +242,12 @@ def render_resume_selector(key_suffix: str = "main", in_sidebar: bool = False) -
 
 
 def initialize_core_state():
-    # 1. Load Multi-Resume Vault from disk
-    vault = load_resumes()
-    st.session_state["resumes_vault"] = vault
+    # 1. Load Multi-Resume Vault from disk if not yet loaded in session
+    if "resumes_vault" not in st.session_state:
+        vault = load_resumes()
+        st.session_state["resumes_vault"] = vault
+    else:
+        vault = st.session_state["resumes_vault"]
     all_names = list(vault.keys())
 
     if "selected_resumes" not in st.session_state or not st.session_state["selected_resumes"]:
@@ -365,7 +321,7 @@ def render_global_pipeline_status():
             st.progress(prog, text=f"{completed}/{status.get('total', 1)} evaluated")
             st.caption(f"📍 `{cur}`")
             st.caption("💡 *You can navigate to any other page while this runs.*")
-            if st.button("🛑 Cancel Pipeline", key="btn_cancel_global_pipeline", use_container_width=True):
+            if st.button("🛑 Cancel Pipeline", key="btn_cancel_global_pipeline", width="stretch"):
                 pipeline_manager.cancel()
                 st.rerun()
 
@@ -378,16 +334,123 @@ def render_global_pipeline_status():
             st.success(f"🎉 **{count}** jobs ready ({src})!")
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("📂 History", key="sb_view_hist", use_container_width=True):
+                if st.button("📂 History", key="sb_view_hist", width="stretch"):
                     st.session_state["active_history_source"] = src
                     st.switch_page("pages/2_history.py")
             with col2:
-                if st.button("Dismiss", key="sb_dismiss_batch", use_container_width=True):
+                if st.button("Dismiss", key="sb_dismiss_batch", width="stretch"):
                     del st.session_state["completion_batch"]
                     pipeline_manager.dismiss_latest_run()
                     st.rerun()
 
+
+def inject_interactive_hover_halo_effects():
+    """
+    Injects smooth interactive hover and halo (luminous glow) effects on buttons
+    and menus while preserving 100% of the default Streamlit theme, textures, and colors.
+    """
+    st.markdown(
+        """
+        <style>
+        /* Smooth transitions for interactive buttons */
+        .stButton > button,
+        button[data-testid="baseButton-primary"],
+        button[data-testid="baseButton-secondary"],
+        [data-testid="stLinkButton"] a,
+        [data-testid="stDownloadButton"] button,
+        button[data-testid="stBaseButton-primary"],
+        button[data-testid="stBaseButton-secondary"] {
+            transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+                        box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        }
+
+        /* Primary Button Hover Lift & Halo Glow */
+        .stButton > button[kind="primary"]:hover,
+        button[data-testid="baseButton-primary"]:hover,
+        [data-testid="stLinkButton"] a[kind="primary"]:hover,
+        [data-testid="stLinkButton"] a:hover,
+        [data-testid="stDownloadButton"] button[kind="primary"]:hover,
+        button[data-testid="stBaseButton-primary"]:hover {
+            transform: translateY(-1.5px) !important;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15), 0 0 14px 2px rgba(255, 75, 75, 0.38) !important;
+        }
+
+        /* Primary Button Active Press */
+        .stButton > button[kind="primary"]:active,
+        button[data-testid="baseButton-primary"]:active,
+        [data-testid="stLinkButton"] a:active,
+        [data-testid="stDownloadButton"] button[kind="primary"]:active,
+        button[data-testid="stBaseButton-primary"]:active {
+            transform: translateY(0.5px) !important;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12), 0 0 8px 1px rgba(255, 75, 75, 0.25) !important;
+        }
+
+        /* Secondary Button Hover Lift & Soft Halo Glow */
+        .stButton > button[kind="secondary"]:hover,
+        button[data-testid="baseButton-secondary"]:hover,
+        .stButton > button:not([kind="primary"]):hover,
+        [data-testid="stDownloadButton"] button:not([kind="primary"]):hover,
+        button[data-testid="stBaseButton-secondary"]:hover {
+            transform: translateY(-1.5px) !important;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 10px 1px rgba(130, 150, 175, 0.32) !important;
+        }
+
+        /* Secondary Button Active Press */
+        .stButton > button[kind="secondary"]:active,
+        button[data-testid="baseButton-secondary"]:active,
+        .stButton > button:not([kind="primary"]):active,
+        [data-testid="stDownloadButton"] button:not([kind="primary"]):active,
+        button[data-testid="stBaseButton-secondary"]:active {
+            transform: translateY(0.5px) !important;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08) !important;
+        }
+
+        /* Sidebar Navigation Menu Items - Hover Shift & Glowing Halo */
+        [data-testid="stSidebarNav"] ul > li a {
+            transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+                        box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+            border-radius: 8px !important;
+        }
+
+        [data-testid="stSidebarNav"] ul > li a:hover {
+            transform: translateX(3px) !important;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), 0 0 12px 2px rgba(255, 75, 75, 0.22) !important;
+        }
+
+        /* Expander Accordion Menu Headers - Subtle Lift & Halo */
+        [data-testid="stExpander"] > details > summary,
+        [data-testid="stExpander"] summary {
+            transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+            border-radius: 8px !important;
+        }
+
+        [data-testid="stExpander"] > details > summary:hover,
+        [data-testid="stExpander"] summary:hover {
+            transform: translateY(-1px) !important;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06), 0 0 10px 1px rgba(255, 75, 75, 0.20) !important;
+        }
+
+        /* Navigation Tabs Menu - Subtle Lift & Glowing Halo on Hover */
+        [data-testid="stTabs"] [data-baseweb="tab"] {
+            transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+                        box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+            border-radius: 6px !important;
+        }
+
+        [data-testid="stTabs"] [data-baseweb="tab"]:hover {
+            transform: translateY(-1px) !important;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05), 0 0 8px 1px rgba(255, 75, 75, 0.22) !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
 def setup_sidebar():
+    inject_interactive_hover_halo_effects()
+    enforce_authentication()
     initialize_core_state()
 
     has_key = bool(st.session_state.get("user_api_key")) or ("Local" in st.session_state.get("model_choice", ""))
@@ -404,25 +467,27 @@ def setup_sidebar():
             font-weight: 500 !important;
         }
         /* Chevron indicator on Scraper showing it has a hover submenu */
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="1_scraper"]) a::after,
-        [data-testid="stSidebarNav"] ul > li:nth-child(1) a::after {
+        [data-testid="stSidebarNav"] ul > li:nth-child(1) a::after,
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="1_scraper"]) a::after {
             content: "▸";
             margin-left: auto;
             font-size: 0.85rem;
             opacity: 0.55;
             transition: transform 0.2s ease, opacity 0.2s ease;
         }
+        [data-testid="stSidebarNav"] ul:has(> li:nth-child(2) [aria-current="page"]) > li:nth-child(1) a::after,
+        [data-testid="stSidebarNav"] ul > li:nth-child(1):hover a::after,
+        [data-testid="stSidebarNav"] ul:has(> li:nth-child(2):hover) > li:nth-child(1) a::after,
         [data-testid="stSidebarNav"] ul:has(> li a[href*="5_linkedin"][aria-current="page"]) > li:has(a[href*="1_scraper"]) a::after,
         [data-testid="stSidebarNav"] ul > li:has(a[href*="1_scraper"]):hover a::after,
         [data-testid="stSidebarNav"] ul:has(> li:has(a[href*="5_linkedin"]):hover) > li:has(a[href*="1_scraper"]) a::after,
-        [data-testid="stSidebarNav"] ul:has(> li:nth-child(2) [aria-current="page"]) > li:nth-child(1) a::after,
-        [data-testid="stSidebarNav"] ul > li:nth-child(1):hover a::after,
-        [data-testid="stSidebarNav"] ul:has(> li:nth-child(2):hover) > li:nth-child(1) a::after {
+        [data-testid="stSidebarNav"] ul:has(> li:has(a[href*="linkedin"]):hover) > li:nth-child(1) a::after {
             content: "▾";
             opacity: 0.9;
         }
         /* Nested tree submenu styling for LinkedIn Evaluator (Fallback) under Scraper */
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]),
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]),
         [data-testid="stSidebarNav"] ul > li:nth-child(2) {
             position: relative;
             margin: 0 !important;
@@ -441,6 +506,7 @@ def setup_sidebar():
         }
         /* L-shaped tree branch connector (|__) drawn inside the left padding area */
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"])::before,
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"])::before,
         [data-testid="stSidebarNav"] ul > li:nth-child(2)::before {
             content: "";
             position: absolute;
@@ -454,16 +520,21 @@ def setup_sidebar():
             pointer-events: none;
         }
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]) span,
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]) span,
         [data-testid="stSidebarNav"] ul > li:nth-child(2) span {
             font-size: 0.92rem !important;
             font-weight: 400 !important;
         }
-        /* Instant expand (0s delay) on hover of Scraper, hover/active/focus of submenu, or when on Fallback page */
+        /* Instant expand on hover of Scraper or when inside submenu */
         [data-testid="stSidebarNav"] ul > li:has(a[href*="1_scraper"]):hover + li:has(a[href*="5_linkedin"]),
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]):hover,
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]):active,
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]):focus-within,
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"] [aria-current="page"]),
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]):hover,
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]):active,
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]):focus-within,
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"] [aria-current="page"]),
         [data-testid="stSidebarNav"] ul > li:nth-child(1):hover + li:nth-child(2),
         [data-testid="stSidebarNav"] ul > li:nth-child(2):hover,
         [data-testid="stSidebarNav"] ul > li:nth-child(2):active,
@@ -522,35 +593,14 @@ def setup_sidebar():
         if updated_key and updated_key != current_key:
             save_local_config(updated_key)
             st.session_state["user_api_key"] = updated_key
-            st.session_state["show_key_success"] = True
+            st.toast("Key Accepted! ✅", icon="🔑")
             st.rerun()
 
-        if st.session_state.get("show_key_success"):
-            st.sidebar.success("Key Accepted! ✅")
-            components.html(
-                """
-                <script>
-                try {
-                    setTimeout(function() {
-                        const alerts = window.parent.document.querySelectorAll('[data-testid="stAlert"]');
-                        alerts.forEach(alert => {
-                            if (alert.innerText.includes("Key Accepted!")) {
-                                alert.style.display = "none";
-                            }
-                        });
-                    }, 10000);
-                } catch (e) {
-                    // Browser iframe restrictions gracefully handled
-                }
-                </script>
-                """,
-                height=0
-            )
-            st.session_state["show_key_success"] = False
-
     render_help_section(in_sidebar=True)
+    render_sidebar_auth_controls()
 
 def enforce_onboarding():
+    enforce_authentication()
     has_key = bool(st.session_state.get("user_api_key")) or ("Local" in st.session_state.get("model_choice", ""))
     has_resume = bool(st.session_state.get("resume_text", "").strip())
     
@@ -564,6 +614,11 @@ def enforce_onboarding():
             """,
             unsafe_allow_html=True
         )
+        _, top_right_col = st.columns([6, 1])
+        with top_right_col:
+            if st.button("🔒 Log Out", key="btn_onboarding_logout", width="stretch"):
+                logout_user()
+                st.rerun()
     
     if not has_key:
         st.title("Welcome to Skippy! 🦘")
@@ -693,7 +748,7 @@ def render_completion_card(batch_jobs: list[dict], source_label: str = "Scraper"
         st.markdown("")
         col_btn1, col_btn2 = st.columns([1.6, 1])
         with col_btn1:
-            if st.button("👉 View in History & Tailor Documents 🚀", type="primary", use_container_width=True, key=f"view_hist_{source_label}"):
+            if st.button("👉 View in History & Tailor Documents 🚀", type="primary", width="stretch", key=f"view_hist_{source_label}"):
                 st.session_state["latest_batch_info"] = {
                     "source": source_label,
                     "urls": [j.get("URL") for j in batch_jobs],
@@ -704,7 +759,7 @@ def render_completion_card(batch_jobs: list[dict], source_label: str = "Scraper"
                     del st.session_state["completion_batch"]
                 st.switch_page("pages/2_history.py")
         with col_btn2:
-            if st.button("➕ Evaluate More Postings", use_container_width=True, key=f"eval_more_{source_label}"):
+            if st.button("➕ Evaluate More Postings", width="stretch", key=f"eval_more_{source_label}"):
                 if "completion_batch" in st.session_state:
                     del st.session_state["completion_batch"]
                 st.rerun()

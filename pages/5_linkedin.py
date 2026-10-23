@@ -37,8 +37,10 @@ with col_desc:
         "Use this extension queue as a reliable fallback if LinkedIn rate-limits automated guest scraping or when you prefer 1-click capture while browsing LinkedIn logged-in."
     )
 with col_back:
-    if st.button("⬅️ Back to Scraper", use_container_width=True):
+    if st.button("⬅️ Back to Scraper", width="stretch"):
         st.switch_page("pages/1_scraper.py")
+    if st.button("📋 Scraper Results", width="stretch", key="btn_goto_scraper_results_from_li"):
+        st.switch_page("pages/7_scraper_results.py")
 render_resume_selector(key_suffix="linkedin_page", in_sidebar=False)
 st.markdown("---")
 
@@ -103,9 +105,9 @@ def render_auto_inbox():
         st.markdown("---")
         
         if status.get("is_running"):
-            st.button("⚙️ Evaluation Running in Background...", disabled=True, use_container_width=True)
+            st.button("⚙️ Evaluation Running in Background...", disabled=True, width="stretch")
         else:
-            if st.button("🚀 Evaluate All Inbox Jobs", type="primary", use_container_width=True):
+            if st.button("🚀 Evaluate All Inbox Jobs", type="primary", width="stretch"):
                 chosen_resumes = st.session_state.get("selected_resumes", ["Master Resume"])
                 combined_resume = combine_selected_resumes(chosen_resumes)
                 st.session_state.resume_text = combined_resume
@@ -160,7 +162,7 @@ def render_auto_inbox():
                         file_name="skippy_extension.zip",
                         mime="application/zip",
                         type="primary",
-                        use_container_width=True
+                        width="stretch"
                     )
                 else:
                     st.error("Missing `skippy-extension/` or `skippy_extension.zip` in project root.")

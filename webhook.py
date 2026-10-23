@@ -6,6 +6,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from database import atomic_write_json, secure_file_permissions
+
 app = FastAPI(title="Skippy Ingestion API")
 
 # Restrict CORS to browser extensions and local Streamlit instances
@@ -29,10 +31,7 @@ _server_lock = threading.Lock()
 _server_thread = None
 
 if os.path.exists(INBOX_FILE):
-    try:
-        os.chmod(INBOX_FILE, 0o600)
-    except OSError:
-        pass
+    secure_file_permissions(INBOX_FILE)
 
 def _read_inbox_unlocked() -> list[dict]:
     if not os.path.exists(INBOX_FILE):
@@ -46,36 +45,7 @@ def _read_inbox_unlocked() -> list[dict]:
 
 
 def _write_inbox_unlocked(jobs: list[dict]):
-    tmp_file = f"{INBOX_FILE}.tmp"
-    try:
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(jobs, f, indent=4)
-        try:
-            os.chmod(tmp_file, 0o600)
-        except OSError:
-            pass
-        try:
-            os.replace(tmp_file, INBOX_FILE)
-        except OSError:
-            # Fallback for Docker single-file bind mounts (Errno 16: Device or resource busy)
-            with open(INBOX_FILE, "w", encoding="utf-8") as f:
-                json.dump(jobs, f, indent=4)
-            try:
-                os.chmod(INBOX_FILE, 0o600)
-            except OSError:
-                pass
-            if os.path.exists(tmp_file):
-                try:
-                    os.remove(tmp_file)
-                except OSError:
-                    pass
-    except Exception as e:
-        if os.path.exists(tmp_file):
-            try:
-                os.remove(tmp_file)
-            except OSError:
-                pass
-        raise e
+    atomic_write_json(INBOX_FILE, jobs, indent=4)
 
 
 def load_inbox_jobs() -> list[dict]:

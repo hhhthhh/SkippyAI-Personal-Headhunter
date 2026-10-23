@@ -90,6 +90,33 @@ class PipelineManager:
             self.evaluated_jobs = []
             self.has_unnotified_completion = False
 
+    def _start_worker_thread(self, target_fn, items, resume_text, system_instructions, model_choice,
+                             api_key, local_base_url, local_model_name, model_override, source, matched_resumes, initial_msg):
+        with self._lock:
+            if self.is_running:
+                return False
+            self.is_running = True
+            self.total_jobs = len(items)
+            self.completed_jobs = 0
+            self.failed_jobs = 0
+            self.current_job_name = initial_msg
+            self.source = source
+            self.evaluated_jobs = []
+            self.start_timestamp = time.time()
+            self.finish_timestamp = None
+            self.has_unnotified_completion = False
+            self.last_error = None
+            self._stop_event.clear()
+
+        self._thread = threading.Thread(
+            target=target_fn,
+            args=(items, resume_text, system_instructions, model_choice,
+                  api_key, local_base_url, local_model_name, model_override, source, matched_resumes),
+            daemon=True
+        )
+        self._thread.start()
+        return True
+
     def start_url_pipeline(
         self,
         urls: list[str],
@@ -104,33 +131,11 @@ class PipelineManager:
         matched_resumes: str = "",
     ) -> bool:
         """Launches a background thread to scrape and evaluate a list of URLs."""
-        with self._lock:
-            if self.is_running:
-                return False
-
-            self.is_running = True
-            self.total_jobs = len(urls)
-            self.completed_jobs = 0
-            self.failed_jobs = 0
-            self.current_job_name = "Initializing job evaluation pipeline..."
-            self.source = source
-            self.evaluated_jobs = []
-            self.start_timestamp = time.time()
-            self.finish_timestamp = None
-            self.has_unnotified_completion = False
-            self.last_error = None
-            self._stop_event.clear()
-
-        self._thread = threading.Thread(
-            target=self._run_url_worker,
-            args=(
-                urls, resume_text, system_instructions, model_choice,
-                api_key, local_base_url, local_model_name, model_override, source, matched_resumes
-            ),
-            daemon=True
+        return self._start_worker_thread(
+            self._run_url_worker, urls, resume_text, system_instructions, model_choice,
+            api_key, local_base_url, local_model_name, model_override, source, matched_resumes,
+            "Initializing job evaluation pipeline..."
         )
-        self._thread.start()
-        return True
 
     def start_inbox_pipeline(
         self,
@@ -146,33 +151,11 @@ class PipelineManager:
         matched_resumes: str = "",
     ) -> bool:
         """Launches a background thread to evaluate jobs from the LinkedIn extension inbox."""
-        with self._lock:
-            if self.is_running:
-                return False
-
-            self.is_running = True
-            self.total_jobs = len(pending_jobs)
-            self.completed_jobs = 0
-            self.failed_jobs = 0
-            self.current_job_name = "Initializing inbox evaluation..."
-            self.source = source
-            self.evaluated_jobs = []
-            self.start_timestamp = time.time()
-            self.finish_timestamp = None
-            self.has_unnotified_completion = False
-            self.last_error = None
-            self._stop_event.clear()
-
-        self._thread = threading.Thread(
-            target=self._run_inbox_worker,
-            args=(
-                pending_jobs, resume_text, system_instructions, model_choice,
-                api_key, local_base_url, local_model_name, model_override, source, matched_resumes
-            ),
-            daemon=True
+        return self._start_worker_thread(
+            self._run_inbox_worker, pending_jobs, resume_text, system_instructions, model_choice,
+            api_key, local_base_url, local_model_name, model_override, source, matched_resumes,
+            "Initializing inbox evaluation..."
         )
-        self._thread.start()
-        return True
 
     def _evaluate_and_persist_posting(
         self,
@@ -203,6 +186,7 @@ class PipelineManager:
             local_model_name=local_model_name,
             model_override=model_override,
             pre_security_flags=pre_security_flags or [],
+            skip_guard=bool(pre_security_flags is not None),
         )
         resolved_company = preset_company or result.company_name or ""
         if resolved_company == "Unknown Company":
@@ -325,7 +309,7 @@ class PipelineManager:
                         self.last_error = job_text
 
                 if i < len(urls) - 1 and not self._stop_event.is_set():
-                    time.sleep(1.5 if raw_text else 2.5)
+                    time.sleep(0.3 if raw_text else 1.2)
         except Exception as e:
             print(f"[Pipeline Fatal Error]: {e}")
             with self._lock:
@@ -385,7 +369,7 @@ class PipelineManager:
                         self.last_error = str(e)
 
                 if i < len(pending_jobs) - 1 and not self._stop_event.is_set():
-                    time.sleep(1.5)
+                    time.sleep(0.3)
         except Exception as e:
             print(f"[Pipeline Fatal Error]: {e}")
             with self._lock:

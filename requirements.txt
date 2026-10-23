@@ -9,3 +9,4 @@ litellm
 requests
 beautifulsoup4
 pydantic
+plotly>=5.24.0

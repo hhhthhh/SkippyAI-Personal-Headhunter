@@ -327,8 +327,13 @@ def evaluate_job(
     local_model_name: str = "",
     model_override: str = "",
     pre_security_flags: list[str] = None,
+    skip_guard: bool = False,
 ) -> JobMatch:
-    guarded_job_text, guard_findings = run_posting_guard(job_text, mode="auto")
+    if skip_guard:
+        guarded_job_text = job_text
+        guard_findings = {}
+    else:
+        guarded_job_text, guard_findings = run_posting_guard(job_text, mode="auto")
     clean_resume = sanitize_xml_boundary(resume_text)
     clean_job = sanitize_xml_boundary(guarded_job_text)
     prompt = f"""
@@ -979,29 +984,69 @@ from functools import lru_cache
 _INLINE_MD_TOKEN = re.compile(r"(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|`[^`\n]+`)")
 
 
-def _add_formatted_runs(paragraph, text: str):
+def _add_formatted_runs(
+    paragraph,
+    text: str,
+    font_name: Optional[str] = None,
+    font_size_pt: Optional[float] = None,
+    default_bold: bool = False,
+    default_italic: bool = False,
+    font_color: Optional[RGBColor] = None,
+):
     """Parses inline Markdown (**bold**, *italic*, ***bold+italic***, `code`) into native python-docx runs."""
     pos = 0
     for m in _INLINE_MD_TOKEN.finditer(text):
         if m.start() > pos:
-            paragraph.add_run(text[pos:m.start()])
+            r = paragraph.add_run(text[pos:m.start()])
+            if font_name:
+                r.font.name = font_name
+            if font_size_pt:
+                r.font.size = Pt(font_size_pt)
+            if font_color:
+                r.font.color.rgb = font_color
+            r.bold = default_bold
+            r.italic = default_italic
         token = m.group(0)
+        is_bold = default_bold
+        is_italic = default_italic
+        code_font = None
+
         if token.startswith("***") and token.endswith("***"):
-            run = paragraph.add_run(token[3:-3])
-            run.bold = True
-            run.italic = True
+            content = token[3:-3]
+            is_bold = True
+            is_italic = True
         elif (token.startswith("**") and token.endswith("**")) or (token.startswith("__") and token.endswith("__")):
-            run = paragraph.add_run(token[2:-2])
-            run.bold = True
+            content = token[2:-2]
+            is_bold = True
         elif token.startswith("*") and token.endswith("*"):
-            run = paragraph.add_run(token[1:-1])
-            run.italic = True
+            content = token[1:-1]
+            is_italic = True
         elif token.startswith("`") and token.endswith("`"):
-            run = paragraph.add_run(token[1:-1])
-            run.font.name = "Consolas"
+            content = token[1:-1]
+            code_font = "Consolas"
+        else:
+            content = token
+
+        r = paragraph.add_run(content)
+        r.font.name = code_font or font_name or r.font.name
+        if font_size_pt:
+            r.font.size = Pt(font_size_pt)
+        if font_color:
+            r.font.color.rgb = font_color
+        r.bold = is_bold
+        r.italic = is_italic
         pos = m.end()
+
     if pos < len(text):
-        paragraph.add_run(text[pos:])
+        r = paragraph.add_run(text[pos:])
+        if font_name:
+            r.font.name = font_name
+        if font_size_pt:
+            r.font.size = Pt(font_size_pt)
+        if font_color:
+            r.font.color.rgb = font_color
+        r.bold = default_bold
+        r.italic = default_italic
 
 
 @lru_cache(maxsize=128)
@@ -1362,44 +1407,15 @@ def _add_bottom_border(paragraph, color_hex: str = "000000", size_eighths_pt: st
 
 def _add_styled_inline_runs(paragraph, text: str, font_name: str, font_size_pt: float, default_bold: bool = False, default_italic: bool = False):
     """Adds inline Markdown runs with explicit ATS font family, point size, and pure black color."""
-    black = RGBColor(0, 0, 0)
-    pos = 0
-    for m in _INLINE_MD_TOKEN.finditer(text):
-        if m.start() > pos:
-            r = paragraph.add_run(text[pos : m.start()])
-            r.font.name = font_name
-            r.font.size = Pt(font_size_pt)
-            r.font.color.rgb = black
-            r.bold = default_bold
-            r.italic = default_italic
-        token = m.group(0)
-        if token.startswith("***") and token.endswith("***"):
-            r = paragraph.add_run(token[3:-3])
-            r.bold = True
-            r.italic = True
-        elif (token.startswith("**") and token.endswith("**")) or (token.startswith("__") and token.endswith("__")):
-            r = paragraph.add_run(token[2:-2])
-            r.bold = True
-            r.italic = default_italic
-        elif token.startswith("*") and token.endswith("*"):
-            r = paragraph.add_run(token[1:-1])
-            r.bold = default_bold
-            r.italic = True
-        elif token.startswith("`") and token.endswith("`"):
-            r = paragraph.add_run(token[1:-1])
-            r.bold = default_bold
-            r.italic = default_italic
-        r.font.name = font_name
-        r.font.size = Pt(font_size_pt)
-        r.font.color.rgb = black
-        pos = m.end()
-    if pos < len(text):
-        r = paragraph.add_run(text[pos:])
-        r.font.name = font_name
-        r.font.size = Pt(font_size_pt)
-        r.font.color.rgb = black
-        r.bold = default_bold
-        r.italic = default_italic
+    _add_formatted_runs(
+        paragraph,
+        text,
+        font_name=font_name,
+        font_size_pt=font_size_pt,
+        default_bold=default_bold,
+        default_italic=default_italic,
+        font_color=RGBColor(0, 0, 0),
+    )
 
 
 @lru_cache(maxsize=128)
@@ -1657,6 +1673,13 @@ def render_ats_resume_html(markdown_text: str, template_style: str = "classic") 
     return "\n".join(parts)
 
 
+@lru_cache(maxsize=1)
+def is_pdf_conversion_available() -> bool:
+    """Checks once whether a headless LibreOffice binary is available for PDF conversion."""
+    import shutil
+    return bool(shutil.which("soffice") or shutil.which("libreoffice"))
+
+
 @lru_cache(maxsize=64)
 def generate_ats_resume_pdf(markdown_text: str, template_style: str = "classic") -> Optional[bytes]:
     """
@@ -1668,9 +1691,9 @@ def generate_ats_resume_pdf(markdown_text: str, template_style: str = "classic")
     import subprocess
     import tempfile
 
-    soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
-    if not soffice_bin:
+    if not is_pdf_conversion_available():
         return None
+    soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
 
     docx_bytes = generate_ats_resume_docx(markdown_text, template_style=template_style)
     try:

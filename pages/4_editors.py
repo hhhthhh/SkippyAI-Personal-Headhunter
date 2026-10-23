@@ -12,15 +12,10 @@ from utils import (
 )
 from evaluator import render_ats_resume_html, generate_ats_resume_docx, generate_ats_resume_pdf
 
+from database import atomic_write_text, atomic_write_json
+
 # 1. Guarantee state is initialized even if accessed directly via legacy routing
 initialize_core_state()
-
-def _secure_file(path: str):
-    if os.path.exists(path):
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
 
 st.subheader("📂 Multi-Resume Vault & Editor")
 st.caption(
@@ -50,7 +45,7 @@ with st.expander(
         key=uploader_key,
     )
     if uploaded_files:
-        if st.button(f"📥 Import {len(uploaded_files)} Uploaded Resume(s) into Vault", type="primary", use_container_width=True):
+        if st.button(f"📥 Import {len(uploaded_files)} Uploaded Resume(s) into Vault", type="primary", width="stretch"):
             imported_names = []
             for uf in uploaded_files:
                 raw_name = os.path.splitext(uf.name)[0].strip()
@@ -124,7 +119,7 @@ with r_col2:
     )
 with r_col3:
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🗑️ Delete Resume", use_container_width=True):
+    if st.button("🗑️ Delete Resume", width="stretch"):
         if len(resumes_vault) > 1:
             del resumes_vault[selected_resume_name]
             save_resumes(resumes_vault)
@@ -171,7 +166,7 @@ new_res_name = st.text_input(
 
 rc1, rc2, rc3 = st.columns(3)
 with rc1:
-    if st.button("💾 Save Changes to Current Resume", type="primary", use_container_width=True):
+    if st.button("💾 Save Changes to Current Resume", type="primary", width="stretch"):
         resumes_vault[selected_resume_name] = current_vault_text
         save_resumes(resumes_vault)
         st.session_state["resumes_vault"] = resumes_vault
@@ -180,7 +175,7 @@ with rc1:
         )
         st.success(f"Saved changes to '{selected_resume_name}'!")
 with rc2:
-    if st.button("➕ Save as New Resume Profile", use_container_width=True):
+    if st.button("➕ Save as New Resume Profile", width="stretch"):
         clean_new = new_res_name.strip()
         if not clean_new:
             st.warning("Please enter a name above for the new resume profile.")
@@ -202,7 +197,7 @@ with rc3:
         data=generate_ats_resume_docx(current_vault_text, template_style="classic"),
         file_name=f"ATS_{safe_rname}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        use_container_width=True,
+        width="stretch",
         key=f"dl_vault_{safe_rname}",
     )
 
@@ -232,21 +227,7 @@ def load_prompt_presets() -> dict:
     return {"Default Boilerplate": "You are an advanced automated job-matching engine..."}
 
 def save_prompt_presets(presets_data: dict):
-    tmp_file = "prompt_presets.json.tmp"
-    with open(tmp_file, "w", encoding="utf-8") as f:
-        json.dump(presets_data, f, indent=4)
-    _secure_file(tmp_file)
-    try:
-        os.replace(tmp_file, "prompt_presets.json")
-    except OSError:
-        with open("prompt_presets.json", "w", encoding="utf-8") as f:
-            json.dump(presets_data, f, indent=4)
-        _secure_file("prompt_presets.json")
-        if os.path.exists(tmp_file):
-            try:
-                os.remove(tmp_file)
-            except OSError:
-                pass
+    atomic_write_json("prompt_presets.json", presets_data, indent=4)
 
 presets = load_prompt_presets()
 preset_names = list(presets.keys())
@@ -308,7 +289,7 @@ new_preset_name = st.text_input("Name for New Preset (Only used when creating a 
 c1, c2, c3 = st.columns(3)
 
 with c1:
-    if st.button("➕ Create New Preset", use_container_width=True):
+    if st.button("➕ Create New Preset", width="stretch"):
         clean_name = new_preset_name.strip()
         if not clean_name:
             st.warning("Please enter a name for the new preset.")
@@ -326,27 +307,13 @@ with c1:
             st.rerun()
 
 with c2:
-    if st.button("💾 Update Current Preset", use_container_width=True):
+    if st.button("💾 Update Current Preset", width="stretch"):
         presets[selected_preset] = prompt_text
         save_prompt_presets(presets)
         st.success(f"'{selected_preset}' updated successfully!")
 
 with c3:
-    if st.button("✅ Set as Active Custom Prompt", type="primary", use_container_width=True):
+    if st.button("✅ Set as Active Custom Prompt", type="primary", width="stretch"):
         st.session_state.system_instructions = prompt_text
-        tmp_file = "custom_prompt.txt.tmp"
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            f.write(prompt_text)
-        _secure_file(tmp_file)
-        try:
-            os.replace(tmp_file, "custom_prompt.txt")
-        except OSError:
-            with open("custom_prompt.txt", "w", encoding="utf-8") as f:
-                f.write(prompt_text)
-            _secure_file("custom_prompt.txt")
-            if os.path.exists(tmp_file):
-                try:
-                    os.remove(tmp_file)
-                except OSError:
-                    pass
+        atomic_write_text("custom_prompt.txt", prompt_text)
         st.success("Active prompt updated! The evaluator will now use these instructions.")

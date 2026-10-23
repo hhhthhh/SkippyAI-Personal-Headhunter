@@ -12,6 +12,7 @@ from evaluator import (
     generate_docx_from_markdown,
     generate_ats_resume_docx,
     generate_ats_resume_pdf,
+    is_pdf_conversion_available,
     render_ats_resume_html,
     get_fit_band,
 )
@@ -143,8 +144,8 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
         else:
             st.markdown(render_ats_resume_html(active_content, template_style=ats_style_key), unsafe_allow_html=True)
 
-        pdf_bytes = generate_ats_resume_pdf(active_content, template_style=ats_style_key)
-        if pdf_bytes:
+        has_pdf = is_pdf_conversion_available()
+        if has_pdf:
             dl_c1, dl_c2 = st.columns(2)
             with dl_c1:
                 st.download_button(
@@ -152,17 +153,17 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
                     data=generate_ats_resume_docx(active_content, template_style=ats_style_key),
                     file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
+                    width="stretch",
                     type="primary",
                     key=f"modal_dl_docx_{file_prefix}_{url}",
                 )
             with dl_c2:
                 st.download_button(
                     "📕 Download ATS Resume (.pdf)",
-                    data=pdf_bytes,
+                    data=lambda: generate_ats_resume_pdf(active_content, template_style=ats_style_key),
                     file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.pdf",
                     mime="application/pdf",
-                    use_container_width=True,
+                    width="stretch",
                     key=f"modal_dl_pdf_{file_prefix}_{url}",
                 )
         else:
@@ -171,7 +172,7 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
                 data=generate_ats_resume_docx(active_content, template_style=ats_style_key),
                 file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
+                width="stretch",
                 type="primary",
                 key=f"modal_dl_{file_prefix}_{url}",
             )
@@ -193,7 +194,7 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
             f"📥 Download {doc_label} (.docx)",
             data=generate_docx_from_markdown(active_content),
             file_name=f"{safe_prefix}_{safe_title}_{safe_suffix}.docx",
-            use_container_width=True,
+            width="stretch",
             type="primary",
             key=f"modal_dl_{file_prefix}_{url}",
         )
@@ -334,7 +335,7 @@ else:
                     if doc_content and not pd.isna(doc_content) and str(doc_content).strip().lower() != "nan":
                         if st.button(
                             f"{icon} View {doc_label}",
-                            use_container_width=True,
+                            width="stretch",
                             key=f"gal_btn_{file_prefix}_{url_val}",
                         ):
                             open_document_modal(doc_label, str(doc_content), file_prefix, doc_key, current_job)

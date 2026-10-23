@@ -4,7 +4,8 @@ import os
 import re
 import time
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from collections import defaultdict
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -19,6 +20,7 @@ from evaluator import (
     generate_docx_from_markdown,
     generate_ats_resume_docx,
     generate_ats_resume_pdf,
+    is_pdf_conversion_available,
     render_ats_resume_html,
     review_and_refine_document,
     format_audit_report_markdown,
@@ -42,10 +44,10 @@ if "latest_batch_info" in st.session_state:
 # Data Management tools tucked neatly at the top
 col_act1, col_act2, _ = st.columns([1.5, 1.5, 7.0])
 with col_act1:
-    if st.button("🔄 Refresh Data", type="secondary", use_container_width=True):
+    if st.button("🔄 Refresh Data", type="secondary", width="stretch"):
         st.rerun()
 with col_act2:
-    if st.button("🗑️ Clear History", type="secondary", use_container_width=True):
+    if st.button("🗑️ Clear History", type="secondary", width="stretch"):
         db.clear_all_history()
         st.rerun()
 
@@ -73,15 +75,49 @@ def format_deadline_badge(deadline_str: str) -> str:
         return raw
 
 
+def parse_job_date(timestamp_str: str) -> date | None:
+    """Parses a date object from a job timestamp string (e.g. 'YYYY-MM-DD HH:MM' or ISO)."""
+    if not timestamp_str or not isinstance(timestamp_str, str):
+        return None
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", timestamp_str.strip())
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    return None
+
+
+def format_day_group_label(job_date: date | None, today: date) -> str:
+    """Formats an expandable group header label with relative and absolute calendar information."""
+    if job_date is None:
+        return "📅 Earlier / Undated Evaluations"
+    date_short = f"{job_date.month}/{job_date.day}/{str(job_date.year)[-2:]}"
+    date_long = job_date.strftime("%A, %b ") + str(job_date.day) + job_date.strftime(", %Y")
+    delta = (today - job_date).days
+    if delta == 0:
+        return f"📅 Today ({date_short}) — {date_long}"
+    elif delta == 1:
+        return f"📅 Yesterday ({date_short}) — {date_long}"
+    elif 1 < delta <= 7:
+        return f"📅 {date_long} ({date_short} · {delta} days ago)"
+    else:
+        return f"📅 {date_long} ({date_short})"
+
+
 # --- TOP-LEVEL DATAFRAME & FILTERS ---
-filter_col, metric_col, _ = st.columns([3, 2, 5])
-with filter_col:
+today = date.today()
+fcol1, fcol2, metric_col, _ = st.columns([2.5, 2.5, 2, 3])
+with fcol1:
     filter_selection = st.selectbox(
         "Filter by Assessment:",
         ["All", "Strong Fit (75+)", "Good Fit (60-74)", "Moderate / Weak Fit (<60)", "Disqualified"]
     )
-with metric_col:
-    st.metric("Total Postings Saved", len(all_saved_jobs))
+with fcol2:
+    date_filter_selection = st.selectbox(
+        "Filter by Evaluation Date:",
+        ["All Dates", "Today", "Yesterday", "Past 7 Days", "Past 30 Days"]
+    )
 
 df = pd.DataFrame(all_saved_jobs)
 # Store the original list index so we can tie dataframe clicks back to the right card
@@ -90,7 +126,10 @@ if "Company" not in df.columns:
     df["Company"] = ""
 if "Deadline" not in df.columns:
     df["Deadline"] = ""
+if "Timestamp" not in df.columns:
+    df["Timestamp"] = ""
 
+df["Job_Date"] = df["Timestamp"].apply(parse_job_date)
 df["Company_Display"] = df["Company"].apply(lambda c: c if str(c).strip() and str(c).strip() != "Unknown Company" else "—")
 df["Deadline_Display"] = df["Deadline"].apply(format_deadline_badge)
 
@@ -110,21 +149,41 @@ elif filter_selection == "Moderate / Weak Fit (<60)":
 elif filter_selection == "Disqualified":
     df = df[df["Assessment"] == "❌ Disqualified"]
 
+if date_filter_selection == "Today":
+    df = df[df["Job_Date"] == today]
+elif date_filter_selection == "Yesterday":
+    df = df[df["Job_Date"] == (today - timedelta(days=1))]
+elif date_filter_selection == "Past 7 Days":
+    df = df[df["Job_Date"].apply(lambda d: d is not None and 0 <= (today - d).days <= 7)]
+elif date_filter_selection == "Past 30 Days":
+    df = df[df["Job_Date"].apply(lambda d: d is not None and 0 <= (today - d).days <= 30)]
+
+with metric_col:
+    if len(df) != len(all_saved_jobs):
+        st.metric("Postings Shown", len(df), delta=f"{len(df) - len(all_saved_jobs)} filtered")
+    else:
+        st.metric("Total Postings Saved", len(all_saved_jobs))
+
 
 def highlight_status(row):
     status = row.get("Application Status", "Not Applied")
     colors = {
         "Applied": "rgba(30,136,229,0.2)",
-        "Interviewing": "rgba(253,216,53,0.2)",
+        "Interviewing": "rgba(142,68,173,0.2)",
         "Waitlisted": "rgba(245,124,0,0.2)",
         "Rejected": "rgba(229,57,53,0.2)",
-        "Offer": "rgba(67,160,71,0.2)",
+        "Rejected (Application)": "rgba(229,57,53,0.2)",
+        "Rejected (Interview)": "rgba(183,28,28,0.25)",
+        "Ghosted / Stale": "rgba(158,158,158,0.2)",
+        "Archived": "rgba(117,117,117,0.2)",
+        "Offer": "rgba(67,160,71,0.25)",
     }
     return [f"background-color: {colors.get(status, '')}"] * len(row)
 
 
 display_cols = ["Timestamp", "Position", "Company_Display", "Assessment", "Score", "Deadline_Display", "Application Status", "URL", "Red Flags"]
-styled_df = df[display_cols].rename(
+valid_cols = [c for c in display_cols if c in df.columns]
+styled_df = df[valid_cols].rename(
     columns={"Company_Display": "Company", "Deadline_Display": "Deadline"}
 ).style.apply(highlight_status, axis=1)
 
@@ -137,7 +196,7 @@ selection_event = st.dataframe(
 )
 
 # Identify which job the user clicked in the dataframe
-active_job_id = int(df.iloc[selection_event.selection.rows[0]]["Original_Index"]) if selection_event.selection.rows else None
+active_job_id = int(df.iloc[selection_event.selection.rows[0]]["Original_Index"]) if (selection_event.selection.rows and selection_event.selection.rows[0] < len(df)) else None
 
 st.markdown("---")
 st.subheader("🔍 Detailed Postings", anchor="details")
@@ -154,8 +213,20 @@ if active_job_id is not None:
 # --- UI Helper Functions ---
 def application_status_tracker(item: dict):
     url = item.get("URL")
-    statuses = ["Not Applied", "Applied", "Interviewing", "Waitlisted", "Rejected", "Offer"]
+    statuses = [
+        "Not Applied",
+        "Applied",
+        "Interviewing",
+        "Waitlisted",
+        "Offer",
+        "Rejected (Application)",
+        "Rejected (Interview)",
+        "Ghosted / Stale",
+        "Archived",
+    ]
     current = item.get("Application Status", "Not Applied")
+    if current and current not in statuses:
+        statuses.append(current)
     
     def on_status_change():
         new_status = st.session_state[f"status_tracker_{url}"]
@@ -421,8 +492,8 @@ def document_generator(item: dict, doc_type: str, generator_func):
 
         if supports_reviewer:
             if doc_type == "Tailored Resume":
-                pdf_bytes = generate_ats_resume_pdf(edited_doc, template_style=ats_style_key)
-                if pdf_bytes:
+                has_pdf = is_pdf_conversion_available()
+                if has_pdf:
                     col1, col_pdf, col2, col3 = st.columns([2.2, 2.2, 2.8, 1.3])
                 else:
                     col1, col2, col3 = st.columns([2.5, 3.2, 1.5])
@@ -434,17 +505,17 @@ def document_generator(item: dict, doc_type: str, generator_func):
                         file_name=f"ATS_Resume_{safe_title}.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         key=f"dl_{cache_key}",
                     )
-                if col_pdf is not None and pdf_bytes:
+                if col_pdf is not None and has_pdf:
                     with col_pdf:
                         st.download_button(
                             "📕 Download ATS (.pdf)",
-                            data=pdf_bytes,
+                            data=lambda: generate_ats_resume_pdf(edited_doc, template_style=ats_style_key),
                             file_name=f"ATS_Resume_{safe_title}.pdf",
                             mime="application/pdf",
-                            use_container_width=True,
+                            width="stretch",
                             key=f"dl_pdf_{cache_key}",
                         )
             else:
@@ -455,11 +526,11 @@ def document_generator(item: dict, doc_type: str, generator_func):
                         data=generate_docx_from_markdown(edited_doc),
                         file_name=f"{safe_doc_type}_{safe_title}.docx",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         key=f"dl_{cache_key}"
                     )
             with col2:
-                if st.button("🔍 Run Reviewer & ATS Fact Audit", use_container_width=True, key=f"audit_btn_{cache_key}"):
+                if st.button("🔍 Run Reviewer & ATS Fact Audit", width="stretch", key=f"audit_btn_{cache_key}"):
                     with st.spinner(f"Auditing {doc_type} against selected Resume(s) & ATS keywords..."):
                         try:
                             audit_resume_pool = combine_selected_resumes(default_doc_resumes, vault) if default_doc_resumes else st.session_state.resume_text
@@ -484,7 +555,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
                         except Exception as e:
                             st.error(f"Reviewer Audit failed: {e}")
             with col3:
-                if st.button("🔄 Regenerate", use_container_width=True, key=f"regen_{cache_key}"):
+                if st.button("🔄 Regenerate", width="stretch", key=f"regen_{cache_key}"):
                     st.session_state[cache_key] = ""
                     db.update_job_field(url, doc_type, "")
                     st.rerun()
@@ -644,45 +715,53 @@ if active_job_id is not None and 0 <= active_job_id < len(all_saved_jobs):
 else:
     active_source = st.session_state.get("active_history_source", "Scraper")
 
-if active_source == "Scraper":
-    tabs = st.tabs([
-        "🕸️ Scraper Batch",
-        "🔗 LinkedIn Inbox",
-        "📝 Manual Entries",
-    ])
-    tab_scraper, tab_linkedin, tab_manual = tabs[0], tabs[1], tabs[2]
-elif active_source == "Manual":
-    tabs = st.tabs([
-        "📝 Manual Entries",
-        "🕸️ Scraper Batch",
-        "🔗 LinkedIn Inbox",
-    ])
-    tab_manual, tab_scraper, tab_linkedin = tabs[0], tabs[1], tabs[2]
-else:
-    tabs = st.tabs([
-        "🔗 LinkedIn Inbox",
-        "🕸️ Scraper Batch",
-        "📝 Manual Entries",
-    ])
-    tab_linkedin, tab_scraper, tab_manual = tabs[0], tabs[1], tabs[2]
+source_tabs_config = [
+    ("Scraper", "🕸️ Scraper Batch", "No Scraper batch jobs evaluated yet."),
+    ("LinkedIn", "🔗 LinkedIn Inbox", "No LinkedIn extension jobs evaluated yet."),
+    ("Manual", "📝 Manual Entries", "No manual entries evaluated yet. (Note: Old jobs from before the update are also stored here)."),
+]
+# Move active source to the front
+source_tabs_config.sort(key=lambda x: 0 if x[0] == active_source else 1)
 
-with tab_linkedin:
-    linkedin_jobs = [j for i, j in enumerate(all_saved_jobs) if get_source(j) == "LinkedIn" and (active_job_id is None or active_job_id == i)]
-    if not linkedin_jobs and active_job_id is None:
-        st.info("No LinkedIn extension jobs evaluated yet.")
-    for j in linkedin_jobs:
-        render_history_card(j, is_expanded=(active_job_id is not None))
+allowed_indices = set(df["Original_Index"].tolist())
+active_job = all_saved_jobs[active_job_id] if (active_job_id is not None and 0 <= active_job_id < len(all_saved_jobs)) else None
 
-with tab_scraper:
-    scraper_jobs = [j for i, j in enumerate(all_saved_jobs) if get_source(j) == "Scraper" and (active_job_id is None or active_job_id == i)]
-    if not scraper_jobs and active_job_id is None:
-        st.info("No Scraper batch jobs evaluated yet.")
-    for j in scraper_jobs:
-        render_history_card(j, is_expanded=(active_job_id is not None))
+tab_elements = st.tabs([cfg[1] for cfg in source_tabs_config])
+for tab, (src_name, _, empty_msg) in zip(tab_elements, source_tabs_config):
+    with tab:
+        src_jobs = [j for i, j in enumerate(all_saved_jobs) if get_source(j) == src_name and i in allowed_indices]
+        if not src_jobs:
+            if filter_selection != "All" or date_filter_selection != "All Dates":
+                st.info(f"No {src_name} postings match the selected filter(s).")
+            else:
+                st.info(empty_msg)
+            continue
 
-with tab_manual:
-    manual_jobs = [j for i, j in enumerate(all_saved_jobs) if get_source(j) == "Manual" and (active_job_id is None or active_job_id == i)]
-    if not manual_jobs and active_job_id is None:
-        st.info("No manual entries evaluated yet. (Note: Old jobs from before the update are also stored here).")
-    for j in manual_jobs:
-        render_history_card(j, is_expanded=(active_job_id is not None))
+        # Group postings by evaluation date
+        groups = defaultdict(list)
+        for j in src_jobs:
+            d = parse_job_date(j.get("Timestamp", ""))
+            groups[d].append(j)
+
+        sorted_dates = sorted(groups.keys(), key=lambda d: d if d is not None else date.min, reverse=True)
+
+        for job_date in sorted_dates:
+            day_jobs = groups[job_date]
+            # Order newest evaluation first within each day
+            day_jobs.sort(key=lambda x: str(x.get("Timestamp", "")), reverse=True)
+
+            day_label = format_day_group_label(job_date, today)
+            contains_active = (active_job is not None and any(j.get("URL") == active_job.get("URL") for j in day_jobs))
+
+            # Smart expand: if a table row is clicked, expand the day container holding that job.
+            # Otherwise, expand today's evaluations by default, or expand if there is only 1 day group.
+            if active_job is not None:
+                is_day_expanded = contains_active
+            else:
+                is_day_expanded = (job_date == today) or (len(sorted_dates) == 1)
+
+            day_count_text = f"**{len(day_jobs)}** posting{'s' if len(day_jobs) != 1 else ''}"
+            with st.expander(f"{day_label} · {day_count_text}", expanded=is_day_expanded):
+                for j in day_jobs:
+                    is_active_card = (active_job is not None and j.get("URL") == active_job.get("URL"))
+                    render_history_card(j, is_expanded=is_active_card)

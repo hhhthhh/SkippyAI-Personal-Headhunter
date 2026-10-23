@@ -3,13 +3,38 @@ os.environ.setdefault("LITELLM_DISABLE_REDACT_SECRETS", "true")
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 import streamlit as st
-from utils import setup_sidebar, enforce_onboarding
+from auth import is_authenticated, render_login_page
+from utils import setup_sidebar, enforce_onboarding, inject_interactive_hover_halo_effects
 from webhook import start_background_listener
 
 # 1. Global Page Configuration (Must be the very first Streamlit command)
 st.set_page_config(page_title="Skippy - AI Job CRM", layout="wide")
 
-# 2. Spin up the background webhook listener for the browser extension
+# 2. Interactive Hover & Halo Effects (Preserving 100% native theme/colors)
+inject_interactive_hover_halo_effects()
+
+# 3. Router Navigation Definition
+pages = [
+    st.Page("pages/1_scraper.py", title="Scraper", icon="🔍"),
+    st.Page("pages/7_scraper_results.py", title="Scraper Results", icon="📋"),
+    st.Page("pages/5_linkedin.py", title="LinkedIn Evaluator (Fallback)", icon="🔗"),
+    st.Page("pages/2_history.py", title="History", icon="📁"),
+    st.Page("pages/6_gallery.py", title="Document Gallery", icon="🖼️"),
+    st.Page("pages/8_pipeline_funnel.py", title="Application Funnel (Sankey)", icon="🌊"),
+    st.Page("pages/3_metrics.py", title="Metrics", icon="📊"),
+    st.Page("pages/4_editors.py", title="Resume and Prompts", icon="⚙️"),
+    st.Page("pages/0_about.py", title="About", icon="👋")
+]
+
+# 3. Authentication Gatekeeper & Router Initialization
+authenticated = is_authenticated()
+pg = st.navigation(pages, position="sidebar" if authenticated else "hidden")
+
+if not authenticated:
+    render_login_page()
+    st.stop()
+
+# 4. Spin up the background webhook listener for the browser extension
 @st.cache_resource
 def init_webhook():
     start_background_listener()
@@ -17,20 +42,8 @@ def init_webhook():
 
 init_webhook()
 
-# 3. Global Sidebar & Security
+# 5. Global Sidebar & Security
 setup_sidebar()
 enforce_onboarding()
 
-# 4. Router Navigation
-pages = [
-    st.Page("pages/1_scraper.py", title="Scraper", icon="🔍"),
-    st.Page("pages/5_linkedin.py", title="LinkedIn Evaluator (Fallback)", icon="🔗"),
-    st.Page("pages/2_history.py", title="History", icon="📁"),
-    st.Page("pages/6_gallery.py", title="Document Gallery", icon="🖼️"),
-    st.Page("pages/3_metrics.py", title="Metrics", icon="📊"),
-    st.Page("pages/4_editors.py", title="Editors", icon="⚙️"),
-    st.Page("pages/0_about.py", title="About", icon="👋")
-]
-
-pg = st.navigation(pages)
 pg.run()

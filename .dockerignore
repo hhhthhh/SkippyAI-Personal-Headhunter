@@ -42,6 +42,8 @@ __pycache__/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+tests/
+scratch/
 
 # ------------------------------------------------------------------------------
 # 5. Sensitive Data & Secrets (CRITICAL: DO NOT BAKE INTO DOCKER IMAGES)

@@ -1,7 +1,10 @@
 import re
+import importlib
+from datetime import datetime
 import streamlit as st
 import pandas as pd
 from collections import Counter, defaultdict
+import plotly.graph_objects as go
 import database as db
 from utils import setup_sidebar, enforce_onboarding
 from evaluator import generate_upskill_roadmap, generate_docx_from_markdown
@@ -92,7 +95,6 @@ def canonicalize_skill_label(raw_skill: str) -> str:
         s,
         flags=re.IGNORECASE,
     ).strip()
-    # Preserve standard acronyms instead of .title() mangling (e.g. SIEM, SOC, IAM, AWS, EDR, MDR)
     words = []
     for w in cleaned.split():
         bare = re.sub(r"[^A-Za-z0-9+/&-]", "", w)
@@ -184,15 +186,16 @@ def classify_red_flag(flag_text: str) -> str:
     return "⚠️ Domain / Role-Specific Caveat"
 
 
-st.subheader("📊 Market Intelligence & Skill Analytics")
-st.write("Aggregated insights harvested and canonicalized from your evaluated job history.")
+# Re-export Sankey funnel utilities from pages.8_pipeline_funnel for backwards compatibility
+_funnel_mod = importlib.import_module("pages.8_pipeline_funnel")
+parse_date_safely = _funnel_mod.parse_date_safely
+compute_sankey_data = _funnel_mod.compute_sankey_data
+build_sankey_figure = _funnel_mod.build_sankey_figure
+render_sankey_section = _funnel_mod.render_sankey_section
 
-history_data = db.load_all_jobs()
 
-if not history_data:
-    st.info("No job history found yet. Run the scraper to start collecting market data!")
-else:
-    total_jobs = len(history_data)
+def render_market_skills_section(history_data: list[dict], total_jobs: int):
+    """Renders market intelligence, skills charts, and red flags."""
     eligible_jobs = sum(1 for item in history_data if item.get("Eligible", True))
     avg_score = sum(item.get("Score", 0) for item in history_data) / total_jobs if total_jobs > 0 else 0
 
@@ -201,7 +204,6 @@ else:
     col2.metric("Eligible Matches", eligible_jobs)
     col3.metric("Average Alignment Score", f"{avg_score:.1f} / 100")
 
-    # Multi-dimensional sub-score averages (for jobs scored with the multi-dimensional rubric)
     sub_scored_jobs = [
         item for item in history_data
         if item.get("Eligible", True) and any(
@@ -210,7 +212,7 @@ else:
         )
     ]
     if sub_scored_jobs:
-        st.markdown("#### 🎯 Multi-Dimensional Alignment Averages *(Eligible Roles)*")
+        st.markdown("#### 🎯 Score Averages *(Eligible Roles)*")
         n_sub = len(sub_scored_jobs)
         avg_tech = sum(int(j.get("Technical Score", 0) or 0) for j in sub_scored_jobs) / n_sub
         avg_exp = sum(int(j.get("Experience Score", 0) or 0) for j in sub_scored_jobs) / n_sub
@@ -234,7 +236,6 @@ else:
         comp_name = str(item.get("Company") or "").strip()
         job_label = f"{role_title} ({comp_name})" if comp_name and comp_name != "Unknown Company" else role_title
 
-        # Deduplicate canonical skills per job so one posting never double-counts the same skill
         if m_skills := item.get("Matching Skills", ""):
             seen_match = set()
             for raw_s in split_skills_preserving_parens(m_skills):
@@ -251,7 +252,6 @@ else:
                     seen_miss.add(canon_g)
                     missing_skill_counts[canon_g] += 1
 
-        # Group prose red flags into canonical themes (deduplicated per posting for accurate posting count)
         seen_flag_cats = set()
         raw_flags = [rf.strip() for rf in str(item.get("Red Flags") or "").split("|") if rf.strip()]
         if not item.get("Eligible", True) and item.get("Disqualification Reason"):
@@ -305,8 +305,9 @@ else:
     else:
         st.caption("No recurring red flags detected across your evaluated postings.")
 
-    # --- ACTIONABLE UPSKILL & LEARNING PLAN GENERATOR ---
-    st.markdown("---")
+
+def render_upskill_section(history_data: list[dict]):
+    """Renders the Actionable Upskill & Learning Plan Generator."""
     st.subheader("🎓 Actionable Upskill & Learning Plan Generator")
     st.write(
         "Prioritizes missing skills across your viable target roles (**Score ≥ 45**, weighted by `gap_weight = (100 - Score) / 100` "
@@ -340,7 +341,6 @@ else:
             seen_in_job = set()
             for raw_g in split_skills_preserving_parens(raw_gaps):
                 clean_g = canonicalize_skill_label(raw_g)
-                # Exclude generic years-of-experience tenure gates from the technical study roadmap table
                 if not clean_g or clean_g.lower() == "nan" or clean_g == "3-4+ Years Required Experience":
                     continue
                 if clean_g not in seen_in_job:
@@ -389,7 +389,7 @@ else:
 
             col_gen, col_clear, _ = st.columns([3.2, 1.8, 5.0])
             with col_gen:
-                if st.button("🎓 Generate Personalized Upskill & Study Roadmap", type="primary", use_container_width=True):
+                if st.button("🎓 Generate Personalized Upskill & Study Roadmap", type="primary", width="stretch"):
                     with st.spinner("Analyzing skill gaps across your target roles and building your learning plan..."):
                         try:
                             roadmap_md = generate_upskill_roadmap(
@@ -408,7 +408,7 @@ else:
                             st.error(f"⚠️ Could not generate Upskill Roadmap: {up_err}")
             with col_clear:
                 if st.session_state.get("upskill_roadmap_md"):
-                    if st.button("🔄 Clear Roadmap", use_container_width=True):
+                    if st.button("🔄 Clear Roadmap", width="stretch"):
                         st.session_state["upskill_roadmap_md"] = ""
                         st.rerun()
 
@@ -423,6 +423,27 @@ else:
                         data=generate_docx_from_markdown(roadmap_val),
                         file_name="Skippy_Personalized_Upskill_Roadmap.docx",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         key="dl_upskill_roadmap_docx",
                     )
+
+
+# --- MAIN PAGE ENTRY POINT ---
+st.subheader("📊 Market Intelligence & Skill Analytics")
+st.write("Aggregated market skill intelligence, red flag friction patterns, and personalized upskill planning.")
+
+history_data = db.load_all_jobs()
+
+if not history_data:
+    st.info("No job history found yet. Run the scraper or evaluate postings to start collecting market and skill intelligence!")
+else:
+    tab_skills, tab_upskill = st.tabs([
+        "📊 Market & Skill Intelligence",
+        "🎓 Actionable Upskill Roadmap"
+    ])
+
+    with tab_skills:
+        render_market_skills_section(history_data, len(history_data))
+
+    with tab_upskill:
+        render_upskill_section(history_data)
