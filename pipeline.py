@@ -309,7 +309,7 @@ class PipelineManager:
                         self.last_error = job_text
 
                 if i < len(urls) - 1 and not self._stop_event.is_set():
-                    time.sleep(0.3 if raw_text else 1.2)
+                    time.sleep(0.05 if raw_text else 0.2)
         except Exception as e:
             print(f"[Pipeline Fatal Error]: {e}")
             with self._lock:
@@ -369,7 +369,7 @@ class PipelineManager:
                         self.last_error = str(e)
 
                 if i < len(pending_jobs) - 1 and not self._stop_event.is_set():
-                    time.sleep(0.3)
+                    time.sleep(0.05)
         except Exception as e:
             print(f"[Pipeline Fatal Error]: {e}")
             with self._lock:

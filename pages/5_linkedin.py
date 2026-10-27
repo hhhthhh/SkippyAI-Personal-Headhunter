@@ -29,17 +29,17 @@ def is_backend_live(port=WEBHOOK_PORT):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
-st.title("🔗 LinkedIn Evaluator (Fallback)")
+st.title("🔗 LinkedIn Extension Inbox")
 col_desc, col_back = st.columns([4, 1.4])
 with col_desc:
     st.markdown(
-        "**Browser Extension Fallback:** Skippy's primary **🔍 Scraper → Native Job Board Search** now searches and scrapes LinkedIn directly without an account. "
-        "Use this extension queue as a reliable fallback if LinkedIn rate-limits automated guest scraping or when you prefer 1-click capture while browsing LinkedIn logged-in."
+        "**Send Jobs from LinkedIn:** Use our browser extension to send job listings straight from LinkedIn into Skippy with a right-click. "
+        "They'll wait in this inbox until you're ready to review them with AI."
     )
 with col_back:
-    if st.button("⬅️ Back to Scraper", width="stretch"):
+    if st.button("⬅️ Back to Job Search", width="stretch"):
         st.switch_page("pages/1_scraper.py")
-    if st.button("📋 Scraper Results", width="stretch", key="btn_goto_scraper_results_from_li"):
+    if st.button("📋 Search Results", width="stretch", key="btn_goto_scraper_results_from_li"):
         st.switch_page("pages/7_scraper_results.py")
 render_resume_selector(key_suffix="linkedin_page", in_sidebar=False)
 st.markdown("---")
@@ -52,6 +52,26 @@ if "completion_batch" in st.session_state:
     )
     st.markdown("---")
 
+@st.cache_data
+def _get_extension_zip_bytes() -> bytes | None:
+    if os.path.exists("skippy_extension.zip"):
+        try:
+            with open("skippy_extension.zip", "rb") as f:
+                return f.read()
+        except OSError:
+            pass
+    if os.path.exists("skippy-extension"):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
+            for root, _, files in os.walk("skippy-extension"):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    arcname = os.path.relpath(full_path, ".")
+                    zf.write(full_path, arcname)
+        return buf.getvalue()
+    return None
+
+
 @st.fragment(run_every="3s")
 def render_auto_inbox():
     check_and_handle_pipeline_completion()
@@ -59,14 +79,14 @@ def render_auto_inbox():
     status = pipeline_manager.get_status()
     if status.get("is_running") and status.get("source") == "LinkedIn":
         with st.container(border=True):
-            st.subheader("⚙️ Background Evaluation Pipeline Active")
+            st.subheader("⚙️ Reviewing Jobs in the Background...")
             total = max(status.get("total", 1), 1)
             completed = status.get("completed", 0)
             prog = min(completed / total, 1.0)
             cur = status.get("current_job", "Working...")
-            st.progress(prog, text=f"Evaluating ({completed}/{total}): {cur}")
-            st.info("💡 **Page persistence active:** You can freely switch to other pages (History, Metrics, etc.). Evaluation continues running in the background and you will be notified when complete!")
-            if st.button("🛑 Stop Pipeline", key="stop_linkedin_pipeline_main"):
+            st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
+            st.info("💡 **You can freely explore other pages:** Reviewing continues in the background while you browse.")
+            if st.button("🛑 Stop Review", key="stop_linkedin_pipeline_main"):
                 pipeline_manager.cancel()
                 st.rerun()
         st.markdown("---")
@@ -95,19 +115,22 @@ def render_auto_inbox():
                 snippet = clean_text[:500] + "..." if len(clean_text) > 500 else clean_text
                 st.markdown(f"**Description Snippet:**\n> {snippet}")
                 
-                if st.button("🗑️ Remove from Queue", key=f"remove_job_{i}"):
-                    current_jobs = load_inbox_jobs()
-                    if i < len(current_jobs):
-                        current_jobs.pop(i)
-                        save_inbox_jobs(current_jobs)
+                if st.button("🗑️ Remove from Queue", key=f"remove_job_{i}_{hash(raw_url)}"):
+                    if raw_url:
+                        remove_inbox_job_by_url(raw_url)
+                    else:
+                        current_jobs = load_inbox_jobs()
+                        if i < len(current_jobs):
+                            current_jobs.pop(i)
+                            save_inbox_jobs(current_jobs)
                     st.rerun()
         
         st.markdown("---")
         
         if status.get("is_running"):
-            st.button("⚙️ Evaluation Running in Background...", disabled=True, width="stretch")
+            st.button("⚙️ Review Running in Background...", disabled=True, width="stretch")
         else:
-            if st.button("🚀 Evaluate All Inbox Jobs", type="primary", width="stretch"):
+            if st.button("🚀 Review All Inbox Jobs", type="primary", width="stretch"):
                 chosen_resumes = st.session_state.get("selected_resumes", ["Master Resume"])
                 combined_resume = combine_selected_resumes(chosen_resumes)
                 st.session_state.resume_text = combined_resume
@@ -131,29 +154,17 @@ def render_auto_inbox():
     else:
         # --- NEW EMPTY STATE ONBOARDING ---
         with st.container(border=True):
-            st.subheader("⚡ Connect the LinkedIn Extension")
-            st.write("Send jobs directly from your browser to this queue in one click.")
+            st.subheader("⚡ Install the Browser Extension")
+            st.write("Send jobs directly from your browser to this inbox in one click.")
             
             if is_backend_live():
-                st.caption(f"🟢 Local Ingestion Server: **Active** (Port {WEBHOOK_PORT})")
+                st.caption(f"🟢 Local Extension Listener: **Active** (Port {WEBHOOK_PORT})")
             else:
-                st.error(f"🔴 Ingestion Server Offline: Start your FastAPI backend (`uvicorn ...`) on port {WEBHOOK_PORT} to receive jobs.")
+                st.error(f"🔴 Extension Listener Offline: Start Skippy with webhook enabled on port {WEBHOOK_PORT} to receive jobs.")
             
             col1, col2 = st.columns([1, 2])
             with col1:
-                zip_data = None
-                if os.path.exists("skippy-extension"):
-                    buf = io.BytesIO()
-                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
-                        for root, _, files in os.walk("skippy-extension"):
-                            for file in files:
-                                full_path = os.path.join(root, file)
-                                arcname = os.path.relpath(full_path, ".")
-                                zf.write(full_path, arcname)
-                    zip_data = buf.getvalue()
-                elif os.path.exists("skippy_extension.zip"):
-                    with open("skippy_extension.zip", "rb") as f:
-                        zip_data = f.read()
+                zip_data = _get_extension_zip_bytes()
 
                 if zip_data:
                     st.download_button(

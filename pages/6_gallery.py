@@ -17,14 +17,14 @@ from evaluator import (
     get_fit_band,
 )
 
-st.title("🖼️ Document Gallery")
-st.caption("Browse, preview, filter, and download all tailored resumes, cover letters, portal Q&A packs, interview guides, and follow-up notes.")
+st.title("🖼️ Saved Documents")
+st.caption("Browse, preview, filter, and download all your tailored resumes, cover letters, application answers, interview guides, follow-up messages, networking notes, and company research guides.")
 
 all_saved_jobs = db.load_all_jobs()
 
 
 def _has_generated_docs(job: dict) -> bool:
-    for key in ("Tailored Resume", "Cover Letter", "Application QA", "Interview Prep", "Followup Note", "Reviewer Audit"):
+    for key in ("Tailored Resume", "Cover Letter", "Application QA", "Interview Prep", "Followup Note", "Outreach Message", "Company Intel", "Reviewer Audit"):
         val = job.get(key)
         if val and not pd.isna(val) and str(val).strip() and str(val).strip().lower() != "nan":
             return True
@@ -44,7 +44,19 @@ def _parse_job_timestamp(ts_str: str) -> datetime:
 gallery_jobs = [j for j in all_saved_jobs if _has_generated_docs(j)]
 
 if not gallery_jobs:
-    st.info("No documents generated yet. Generate resumes, cover letters, or interview prep in the **History** page to see them here!")
+    with st.container(border=True):
+        st.subheader("🖼️ No Saved Documents Yet")
+        st.write(
+            "All your generated documents—tailored ATS resumes, custom cover letters, application answers, "
+            "and interview prep guides—are automatically archived here for fast searching, editing, and downloading."
+        )
+        c1, c2, _ = st.columns([1.8, 1.8, 4])
+        with c1:
+            if st.button("📁 Go to Job History ➔", type="primary", width="stretch", key="btn_gallery_empty_goto_history"):
+                st.switch_page("pages/2_history.py")
+        with c2:
+            if st.button("🔍 Find & Review Jobs ➔", width="stretch", key="btn_gallery_empty_goto_search"):
+                st.switch_page("pages/1_scraper.py")
     st.stop()
 
 
@@ -58,15 +70,23 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
         comp = ""
     ts = str(job.get("Timestamp") or "").strip()
 
-    comp_part = f" - {comp}" if comp else ""
-    ts_part = f" - {ts}" if ts else ""
-    st.markdown(f"### {doc_label}")
-    st.caption(f"**{pos}{comp_part}{ts_part}**")
-
     raw_title = comp or pos or "Job"
     safe_title = re.sub(r"[^\w\-_\.]", "_", raw_title.replace(" ", "_"))
     safe_prefix = re.sub(r"[^\w\-_\.]", "_", str(file_prefix))
     safe_suffix = re.sub(r"[^\w\-]", "_", url[-8:]) if url else "doc"
+
+    comp_part = f" - {comp}" if comp else ""
+    ts_part = f" - {ts}" if ts else ""
+
+    col_m_hdr, col_m_btn = st.columns([3.6, 1.8], vertical_alignment="bottom")
+    with col_m_hdr:
+        st.markdown(f"### {doc_label}")
+        st.caption(f"**{pos}{comp_part}{ts_part}**")
+    with col_m_btn:
+        if st.button("🔍 Jump to Posting Details ➔", key=f"modal_jump_{safe_suffix}_{safe_prefix}", width="stretch", type="secondary", help="Jump directly to this job's expanded card and workspace on the Job History page"):
+            st.session_state["active_job_url"] = url
+            st.session_state["jump_to_card"] = True
+            st.switch_page("pages/2_history.py")
 
     cache_key = f"{doc_key}_{url}"
     editor_key = f"modal_txt_{file_prefix}_{url}"
@@ -88,14 +108,14 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
 
     if file_prefix == "Resume":
         style_options = {
-            "📄 Classic Clean ATS (Arial — Standard Single-Column, Right-Aligned Dates)": "classic",
-            "✨ Modern Executive ATS (Calibri + Section Divider Rules)": "modern",
-            "🏛️ Harvard / Traditional Serif ATS (Times New Roman + Section Rules)": "serif",
+            "📄 Classic Clean (Arial — Simple Single Column)": "classic",
+            "✨ Modern Professional (Calibri with Clean Dividers)": "modern",
+            "🏛️ Traditional / Academic (Times New Roman with Dividers)": "serif",
         }
         c_tpl, c_view = st.columns([2.8, 2.4])
         with c_tpl:
             chosen_label = st.selectbox(
-                "🎨 ATS Resume Template Style:",
+                "🎨 Resume Design Style:",
                 list(style_options.keys()),
                 key=f"gal_ats_tpl_{safe_suffix}",
             )
@@ -239,7 +259,7 @@ with st.container(border=True):
         search_query = st.text_input(
             "🔎 Search Role / Company:",
             value="",
-            placeholder="e.g. SOC Analyst...",
+            placeholder="e.g. Registered Nurse, Legal Counsel, Operations Lead, SOC Analyst...",
             key="gallery_search_query",
         )
 
@@ -326,6 +346,20 @@ else:
                 comp_str = f" - {comp_name}" if comp_name else ""
                 ts_str = f" - 🕒 {ts_val}" if ts_val else ""
                 st.markdown(f"**{pos_name}{comp_str}{ts_str}**")
+
+                url_val = str(job.get("URL") or "")
+                safe_card_suffix = re.sub(r"[^\w\-]", "_", url_val[-8:]) if url_val else f"card_{index}"
+                if st.button(
+                    "🔍 Jump to Posting ➔",
+                    key=f"gal_jump_{index}_{safe_card_suffix}",
+                    width="stretch",
+                    type="secondary",
+                    help="Jump directly to this posting's expanded card and workspace on the History page"
+                ):
+                    st.session_state["active_job_url"] = url_val
+                    st.session_state["jump_to_card"] = True
+                    st.switch_page("pages/2_history.py")
+
                 st.write("")
 
                 def render_gallery_button(doc_label: str, doc_key: str, file_prefix: str, icon: str, current_job: dict = job):
@@ -345,5 +379,7 @@ else:
                 render_gallery_button("Application Q&A", "Application QA", "ApplicationQA", "📋")
                 render_gallery_button("Interview Prep", "Interview Prep", "InterviewPrep", "🎤")
                 render_gallery_button("Follow-Up Note", "Followup Note", "FollowupNote", "📬")
+                render_gallery_button("Outreach Notes", "Outreach Message", "Outreach", "🎯")
+                render_gallery_button("Company Dossier", "Company Intel", "CompanyDossier", "🏢")
                 if job.get("Reviewer Audit") and str(job.get("Reviewer Audit")).lower() != "nan":
                     render_gallery_button("ATS & Fact Audit", "Reviewer Audit", "AuditReport", "🛡️")

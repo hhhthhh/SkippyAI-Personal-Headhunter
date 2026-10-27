@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, Page
 
 from posting_guard import guard as run_posting_guard
+from database import normalize_job_url
 
 LINKEDIN_SEARCH_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 LINKEDIN_DETAIL_URL = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting"
@@ -808,3 +809,280 @@ def scrape_universal_search_results(search_url: str) -> list[str]:
         _log_scraper_error(f"Error scraping search page: {str(e)}")
         
     return job_urls
+
+
+def extract_ats_board_info(url_or_token: str, default_platform: str = "greenhouse") -> tuple[str, str]:
+    """
+    Parses a board token and platform from either a direct URL or token slug.
+    Examples:
+      - 'https://boards.greenhouse.io/anthropic' -> ('greenhouse', 'anthropic')
+      - 'https://jobs.ashbyhq.com/openai' -> ('ashby', 'openai')
+      - 'https://jobs.lever.co/stripe' -> ('lever', 'stripe')
+      - 'anthropic' -> (default_platform, 'anthropic')
+    """
+    raw = (url_or_token or "").strip()
+    if not raw:
+        return default_platform, ""
+
+    gh_match = re.search(r"(?:boards\.greenhouse\.io|greenhouse\.io)/([^/?#]+)", raw, re.I)
+    if gh_match:
+        return "greenhouse", gh_match.group(1).lower()
+
+    ashby_match = re.search(r"jobs\.ashbyhq\.com/([^/?#]+)", raw, re.I)
+    if ashby_match:
+        return "ashby", ashby_match.group(1).lower()
+
+    lever_match = re.search(r"jobs\.lever\.co/([^/?#]+)", raw, re.I)
+    if lever_match:
+        return "lever", lever_match.group(1).lower()
+
+    slug = re.sub(r"[^a-zA-Z0-9_-]", "", raw).lower()
+    return default_platform.lower(), slug
+
+
+def fetch_greenhouse_board(
+    board_token: str,
+    limit: int = 50,
+    evaluated_urls: Optional[set] = None,
+    seen_urls: Optional[set] = None,
+    suppress_errors: bool = False,
+) -> list[dict]:
+    """
+    Fetches active job openings directly from Greenhouse's public board API.
+    Zero-authentication, rate-limit compliant, clean JSON extraction.
+    Endpoint: https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs?content=true
+    """
+    _, clean_token = extract_ats_board_info(board_token, default_platform="greenhouse")
+    if not clean_token:
+        return []
+
+    url = f"https://boards-api.greenhouse.io/v1/boards/{clean_token}/jobs?content=true"
+    session = _get_http_session()
+    headers = {"User-Agent": "SkippyCareerBot/2.0 (Career Automation & Intelligence Engine)"}
+    try:
+        resp = session.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            if not suppress_errors:
+                _log_scraper_error(f"Greenhouse board API returned HTTP {resp.status_code} for board '{clean_token}'")
+            return []
+        data = resp.json()
+    except Exception as e:
+        if not suppress_errors:
+            _log_scraper_error(f"Failed to fetch Greenhouse board '{clean_token}': {e}")
+        return []
+
+    jobs = data.get("jobs", []) if isinstance(data, dict) else []
+    results = []
+
+    eval_set = {normalize_job_url(u) for u in (evaluated_urls or set()) if u}
+    seen_set = {normalize_job_url(u) for u in (seen_urls or set()) if u}
+
+    for item in jobs:
+        if len(results) >= limit:
+            break
+        job_url = item.get("absolute_url") or ""
+        norm_url = normalize_job_url(job_url)
+        is_eval = norm_url in eval_set
+        is_seen = is_eval or norm_url in seen_set
+
+        title = item.get("title", "")
+        loc_obj = item.get("location") or {}
+        location = loc_obj.get("name", "Not Specified") if isinstance(loc_obj, dict) else str(loc_obj)
+        departments = [d.get("name") for d in item.get("departments", []) if isinstance(d, dict) and d.get("name")]
+        dept_str = ", ".join(departments) if departments else "General"
+
+        html_content = html.unescape(item.get("content", ""))
+        clean_text = ""
+        if html_content:
+            soup = BeautifulSoup(html_content, "html.parser")
+            clean_text = soup.get_text(separator="\n").strip()
+
+        results.append({
+            "id": f"gh_{item.get('id')}",
+            "title": title,
+            "company": clean_token.replace("-", " ").title(),
+            "location": location,
+            "department": dept_str,
+            "url": job_url,
+            "date": item.get("updated_at", "")[:10] if item.get("updated_at") else "",
+            "description": clean_text,
+            "source": f"Greenhouse ({clean_token})",
+            "is_evaluated": is_eval,
+            "is_seen": is_seen,
+        })
+    return results
+
+
+def fetch_ashby_board(
+    board_token: str,
+    limit: int = 50,
+    evaluated_urls: Optional[set] = None,
+    seen_urls: Optional[set] = None,
+    suppress_errors: bool = False,
+) -> list[dict]:
+    """
+    Fetches active job openings directly from Ashby's public job board API.
+    Zero-authentication, clean JSON extraction.
+    Endpoint: https://api.ashbyhq.com/posting-api/job-board/{board_token}
+    """
+    _, clean_token = extract_ats_board_info(board_token, default_platform="ashby")
+    if not clean_token:
+        return []
+
+    url = f"https://api.ashbyhq.com/posting-api/job-board/{clean_token}"
+    session = _get_http_session()
+    headers = {"User-Agent": "SkippyCareerBot/2.0 (Career Automation & Intelligence Engine)"}
+    try:
+        resp = session.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            if not suppress_errors:
+                _log_scraper_error(f"Ashby board API returned HTTP {resp.status_code} for board '{clean_token}'")
+            return []
+        data = resp.json()
+    except Exception as e:
+        if not suppress_errors:
+            _log_scraper_error(f"Failed to fetch Ashby board '{clean_token}': {e}")
+        return []
+
+    jobs = data.get("jobs", []) if isinstance(data, dict) else []
+    results = []
+
+    eval_set = {normalize_job_url(u) for u in (evaluated_urls or set()) if u}
+    seen_set = {normalize_job_url(u) for u in (seen_urls or set()) if u}
+
+    for item in jobs:
+        if len(results) >= limit:
+            break
+        job_url = item.get("jobUrl") or item.get("applyUrl") or f"https://jobs.ashbyhq.com/{clean_token}/{item.get('id')}"
+        norm_url = normalize_job_url(job_url)
+        is_eval = norm_url in eval_set
+        is_seen = is_eval or norm_url in seen_set
+
+        title = item.get("title", "")
+        location = item.get("location", "") or ("Remote" if item.get("isRemote") else "Not Specified")
+        dept_str = item.get("department", "General")
+
+        clean_text = item.get("descriptionPlain") or ""
+        if not clean_text and item.get("descriptionHtml"):
+            soup = BeautifulSoup(html.unescape(item.get("descriptionHtml")), "html.parser")
+            clean_text = soup.get_text(separator="\n").strip()
+
+        results.append({
+            "id": f"ashby_{item.get('id')}",
+            "title": title,
+            "company": clean_token.replace("-", " ").title(),
+            "location": location,
+            "department": dept_str,
+            "url": job_url,
+            "date": item.get("publishedAt", "")[:10] if item.get("publishedAt") else "",
+            "description": clean_text,
+            "source": f"Ashby ({clean_token})",
+            "is_evaluated": is_eval,
+            "is_seen": is_seen,
+        })
+    return results
+
+
+def fetch_lever_board(
+    board_token: str,
+    limit: int = 50,
+    evaluated_urls: Optional[set] = None,
+    seen_urls: Optional[set] = None,
+    suppress_errors: bool = False,
+) -> list[dict]:
+    """
+    Fetches active job openings directly from Lever's public postings API.
+    Zero-authentication, clean JSON extraction.
+    Endpoint: https://api.lever.co/v0/postings/{board_token}?mode=json
+    """
+    _, clean_token = extract_ats_board_info(board_token, default_platform="lever")
+    if not clean_token:
+        return []
+
+    url = f"https://api.lever.co/v0/postings/{clean_token}?mode=json"
+    session = _get_http_session()
+    headers = {"User-Agent": "SkippyCareerBot/2.0 (Career Automation & Intelligence Engine)"}
+    try:
+        resp = session.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            if not suppress_errors:
+                _log_scraper_error(f"Lever board API returned HTTP {resp.status_code} for board '{clean_token}'")
+            return []
+        data = resp.json()
+    except Exception as e:
+        if not suppress_errors:
+            _log_scraper_error(f"Failed to fetch Lever board '{clean_token}': {e}")
+        return []
+
+    if not isinstance(data, list):
+        return []
+
+    results = []
+    eval_set = {normalize_job_url(u) for u in (evaluated_urls or set()) if u}
+    seen_set = {normalize_job_url(u) for u in (seen_urls or set()) if u}
+
+    for item in data:
+        if len(results) >= limit:
+            break
+        job_url = item.get("hostedUrl") or item.get("applyUrl") or ""
+        norm_url = normalize_job_url(job_url)
+        is_eval = norm_url in eval_set
+        is_seen = is_eval or norm_url in seen_set
+
+        title = item.get("text", "")
+        cats = item.get("categories") or {}
+        location = cats.get("location", "Not Specified") if isinstance(cats, dict) else "Not Specified"
+        team = cats.get("team", "General") if isinstance(cats, dict) else "General"
+        clean_text = item.get("descriptionPlain") or ""
+
+        created_ms = item.get("createdAt", 0)
+        date_str = ""
+        if created_ms:
+            try:
+                date_str = datetime.fromtimestamp(created_ms / 1000.0).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+
+        results.append({
+            "id": f"lever_{item.get('id')}",
+            "title": title,
+            "company": clean_token.replace("-", " ").title(),
+            "location": location,
+            "department": team,
+            "url": job_url,
+            "date": date_str,
+            "description": clean_text,
+            "source": f"Lever ({clean_token})",
+            "is_evaluated": is_eval,
+            "is_seen": is_seen,
+        })
+    return results
+
+
+def fetch_ats_board_jobs(
+    platform: str,
+    token_or_url: str,
+    limit: int = 50,
+    evaluated_urls: Optional[set] = None,
+    seen_urls: Optional[set] = None,
+) -> list[dict]:
+    """Unified router for fetching jobs from Greenhouse, Ashby, or Lever public boards."""
+    detected_plat, token = extract_ats_board_info(token_or_url, default_platform=platform)
+    plat = (detected_plat or platform).lower()
+    if "greenhouse" in plat:
+        return fetch_greenhouse_board(token, limit=limit, evaluated_urls=evaluated_urls, seen_urls=seen_urls)
+    elif "ashby" in plat:
+        return fetch_ashby_board(token, limit=limit, evaluated_urls=evaluated_urls, seen_urls=seen_urls)
+    elif "lever" in plat:
+        return fetch_lever_board(token, limit=limit, evaluated_urls=evaluated_urls, seen_urls=seen_urls)
+    elif "auto" in plat or not plat:
+        for candidate_plat, fetcher in [
+            ("greenhouse", fetch_greenhouse_board),
+            ("ashby", fetch_ashby_board),
+            ("lever", fetch_lever_board),
+        ]:
+            res = fetcher(token, limit=limit, evaluated_urls=evaluated_urls, seen_urls=seen_urls, suppress_errors=True)
+            if res:
+                return res
+        return []
+    return []

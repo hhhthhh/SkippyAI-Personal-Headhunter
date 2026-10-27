@@ -19,6 +19,9 @@ services:
       - ./resume.md:/app/resume.md
       - ./resumes.json:/app/resumes.json
       - ./custom_prompt.txt:/app/custom_prompt.txt
+      - ./custom_user_prompt.txt:/app/custom_user_prompt.txt
+      - ./profile_alignment.json:/app/profile_alignment.json
       - ./prompt_presets.json:/app/prompt_presets.json
       - ./inbox.json:/app/inbox.json
+      - ./app_settings.json:/app/app_settings.json
     restart: unless-stopped

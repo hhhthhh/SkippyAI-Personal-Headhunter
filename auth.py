@@ -647,14 +647,13 @@ def render_login_page() -> None:
                                     f"({attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining before lockout)"
                                 )
             else:
-                st.markdown("<h2 class='skippy-auth-header'>🛡️ Secure Your Skippy Instance</h2>", unsafe_allow_html=True)
+                st.markdown("<h2 class='skippy-auth-header'>🛡️ Secure Your Skippy Account</h2>", unsafe_allow_html=True)
                 st.markdown(
-                    "<p class='skippy-auth-subtitle'>Create your administrator login to lock down this deployment.</p>",
+                    "<p class='skippy-auth-subtitle'>Create a password to keep your job search private.</p>",
                     unsafe_allow_html=True,
                 )
                 st.info(
-                    "Your password is salted and hashed locally with **PBKDF2-HMAC-SHA256 (600,000 iterations)** "
-                    "and is never stored in plaintext.",
+                    "Your password is encrypted securely right on your computer and is never shared or stored in plain text.",
                     icon="🔐",
                 )
 

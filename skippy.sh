@@ -28,12 +28,12 @@ if [ ! -d "venv" ] || [ ! -f "venv/bin/activate" ]; then
         echo "❌ [Error] Python 3 could not be found on your computer."
         echo ""
         if [[ "$OSTYPE" == "darwin"* ]]; then
-            echo "👉 For Mac: Open Terminal and install Python via Homebrew:"
+            echo "For Mac: Open Terminal and install Python via Homebrew:"
             echo "   brew install python"
         else
-            echo "👉 For Ubuntu/Debian/WSL: Open terminal and run:"
+            echo "For Ubuntu/Debian/WSL: Open terminal and run:"
             echo "   sudo apt update && sudo apt install -y python3 python3-pip python3-venv"
-            echo "👉 For Fedora:"
+            echo "For Fedora:"
             echo "   sudo dnf install -y python3 python3-pip"
         fi
         echo ""
@@ -82,6 +82,14 @@ fi
 # LAUNCH SEQUENCE
 # =======================================================
 source venv/bin/activate
+
+# Ensure template prompt files are initialized
+if [ ! -s custom_prompt.txt ] && [ -f custom_prompt.template.txt ]; then
+    cp custom_prompt.template.txt custom_prompt.txt 2>/dev/null || true
+fi
+if [ ! -s custom_user_prompt.txt ] && [ -f custom_prompt.template.txt ]; then
+    cp custom_prompt.template.txt custom_user_prompt.txt 2>/dev/null || true
+fi
 
 # Suppress Streamlit email prompt cleanly
 export STREAMLIT_BROWSER_GATHER_USAGE_STATS=false

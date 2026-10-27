@@ -13,7 +13,7 @@ echo ""
 if ! command -v docker &>/dev/null; then
     echo "❌ [Error] Docker is not installed on this system."
     echo ""
-    echo "👉 Please download and install Docker Desktop from:"
+    echo "Please download and install Docker Desktop from:"
     echo "   https://www.docker.com/products/docker-desktop/"
     echo ""
     read -p "Press Enter to exit..."
@@ -37,7 +37,7 @@ if ! docker info &>/dev/null; then
 
     if ! docker info &>/dev/null; then
         echo "❌ [Error] Could not connect to Docker."
-        echo "👉 Please start Docker Desktop, wait for it to finish starting, and run this script again."
+        echo "Please start Docker Desktop, wait for it to finish starting, and run this script again."
         echo ""
         read -p "Press Enter to exit..."
         exit 1
@@ -58,7 +58,13 @@ else
 fi
 
 # 4. Pre-create persistence files so Docker won't mount them as directories
-touch skippy.db .env resume.md custom_prompt.txt 2>/dev/null || true
+if [ ! -s custom_prompt.txt ] && [ -f custom_prompt.template.txt ]; then
+    cp custom_prompt.template.txt custom_prompt.txt 2>/dev/null || true
+fi
+if [ ! -s custom_user_prompt.txt ] && [ -f custom_prompt.template.txt ]; then
+    cp custom_prompt.template.txt custom_user_prompt.txt 2>/dev/null || true
+fi
+touch skippy.db .env resume.md custom_prompt.txt custom_user_prompt.txt profile_alignment.json app_settings.json 2>/dev/null || true
 if [ ! -s resumes.json ]; then
     echo "{}" > resumes.json 2>/dev/null || true
 fi
@@ -68,7 +74,10 @@ fi
 if [ ! -s prompt_presets.json ]; then
     echo "{}" > prompt_presets.json 2>/dev/null || true
 fi
-chmod 600 skippy.db .env resume.md resumes.json inbox.json 2>/dev/null || true
+if [ ! -s app_settings.json ]; then
+    echo "{}" > app_settings.json 2>/dev/null || true
+fi
+chmod 600 skippy.db .env resume.md resumes.json inbox.json custom_prompt.txt custom_user_prompt.txt profile_alignment.json app_settings.json 2>/dev/null || true
 
 echo "🚀 Building and starting the Skippy container..."
 $DOCKER_COMPOSE up -d --build

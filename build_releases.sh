@@ -31,7 +31,7 @@ import os, sys, zipfile
 
 target_zip = sys.argv[1]
 items = sys.argv[2:]
-exclude_names = {"__pycache__", ".DS_Store", ".env", ".env.local", "skippy.db", "skippy.db-journal", "skippy.db-wal", "resume.md", "resumes.json", "inbox.json", "test_venv", "venv", ".venv", ".git", "portfolio-site", "portfoliosite"}
+exclude_names = {"__pycache__", ".DS_Store", ".env", ".env.local", "skippy.db", "skippy.db-journal", "skippy.db-wal", "resume.md", "resumes.json", "profile_alignment.json", "custom_prompt.txt", "custom_user_prompt.txt", "app_settings.json", "inbox.json", "test_venv", "venv", ".venv", ".git", "portfolio-site", "portfoliosite", "scratch"}
 
 with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
     for item in items:
@@ -85,11 +85,11 @@ else
 fi
 
 # 5. Core application files required for all target platforms
-# Includes all application logic (including pipeline.py and posting_guard.py), prompts, configuration templates, and pages.
-COMMON_FILES="app.py database.py evaluator.py pipeline.py posting_guard.py scraper.py utils.py webhook.py requirements.txt custom_prompt.txt prompt_presets.json README.md .env.example skippy_extension.zip pages/"
+# Includes all application logic (including auth.py, pipeline.py, posting_guard.py, career_compass.py, sample_data.py, sankey_utils.py), prompts, configuration templates, and pages.
+COMMON_FILES="app.py auth.py career_compass.py database.py evaluator.py pipeline.py posting_guard.py sample_data.py sankey_utils.py scraper.py utils.py webhook.py requirements.txt custom_prompt.template.txt prompt_presets.json README.md .env.example skippy_extension.zip pages/ .streamlit/"
 
 # 6. Pre-flight check: Verify all required core files exist
-echo "🔍 Verifying required application files..."
+echo "Verifying required application files..."
 MISSING_FILES=0
 for item in $COMMON_FILES; do
     if [ ! -e "$item" ]; then
@@ -124,6 +124,10 @@ EXCLUDES=(
     -x "*.sqlite*"
     -x "resume.md"
     -x "resumes.json"
+    -x "profile_alignment.json"
+    -x "custom_prompt.txt"
+    -x "custom_user_prompt.txt"
+    -x "app_settings.json"
     -x "*.docx"
     -x "*.pdf"
     -x "inbox.json"
@@ -136,6 +140,7 @@ EXCLUDES=(
     -x "venv/*"
     -x ".venv/*"
     -x ".git/*"
+    -x "scratch/*"
     -x "portfolio-site/*"
     -x "portfoliosite/*"
 )
@@ -160,7 +165,7 @@ echo "   ✅ Skippy-Docker.zip created ($(du -h releases/Skippy-Docker.zip 2>/de
 
 # 10. Verification of built archives
 echo ""
-echo "🔍 Validating archive integrity..."
+echo "Validating archive integrity..."
 for pkg in releases/*.zip; do
     if [ -f "$pkg" ]; then
         if verify_zip "$pkg"; then

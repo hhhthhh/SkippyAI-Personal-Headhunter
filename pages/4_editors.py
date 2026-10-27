@@ -9,18 +9,23 @@ from utils import (
     extract_text_from_uploaded_resume,
     combine_selected_resumes,
     render_resume_selector,
+    get_active_prompt_details,
+    set_active_prompt_mode,
+    save_custom_user_prompt,
+    PROMPT_MODE_CUSTOM,
+    PROMPT_MODE_COMPASS,
 )
-from evaluator import render_ats_resume_html, generate_ats_resume_docx, generate_ats_resume_pdf
+from evaluator import render_ats_resume_html, generate_ats_resume_docx, generate_ats_resume_pdf, lint_ats_resume
 
 from database import atomic_write_text, atomic_write_json
 
 # 1. Guarantee state is initialized even if accessed directly via legacy routing
 initialize_core_state()
 
-st.subheader("📂 Multi-Resume Vault & Editor")
+st.subheader("📂 Resume Library & Editor")
 st.caption(
-    "Upload as many specialized resumes as you want (`.docx`, `.pdf`, `.md`, `.txt`) or create/edit them below. "
-    "When you run an evaluation or generate materials, you can pick which resume(s) to match and harvest from."
+    "Upload as many specialized resumes as you want (`.docx`, `.pdf`, `.md`, `.txt`) or create and edit them below. "
+    "When you score jobs or create tailored applications, you can choose which resumes Skippy should pull details from."
 )
 
 resumes_vault = load_resumes()
@@ -45,7 +50,7 @@ with st.expander(
         key=uploader_key,
     )
     if uploaded_files:
-        if st.button(f"📥 Import {len(uploaded_files)} Uploaded Resume(s) into Vault", type="primary", width="stretch"):
+        if st.button(f"📥 Import {len(uploaded_files)} Uploaded Resume(s)", type="primary", width="stretch"):
             imported_names = []
             for uf in uploaded_files:
                 raw_name = os.path.splitext(uf.name)[0].strip()
@@ -62,7 +67,7 @@ with st.expander(
                 st.session_state["resume_uploader_version"] += 1
                 st.session_state["resume_feedback"] = (
                     "success",
-                    f"Imported {len(imported_names)} resume(s) into your vault: {', '.join(imported_names)}",
+                    f"Imported {len(imported_names)} resume(s) into your library: {', '.join(imported_names)}",
                 )
                 st.rerun()
             else:
@@ -105,7 +110,7 @@ def on_vault_resume_change():
 r_col1, r_col2, r_col3 = st.columns([3.0, 2.2, 1.2])
 with r_col1:
     selected_resume_name = st.selectbox(
-        f"📄 Select Resume to View / Edit ({len(resume_names)} saved in vault):",
+        f"📄 Select Resume to View / Edit ({len(resume_names)} saved):",
         resume_names if resume_names else ["Master Resume"],
         key="vault_resume_selector",
         on_change=on_vault_resume_change,
@@ -113,7 +118,7 @@ with r_col1:
 with r_col2:
     editor_view_mode = st.radio(
         "Editor Mode:",
-        ["✏️ Edit Markdown", "📄 ATS Template Preview", "🔀 Live Split View"],
+        ["✏️ Edit Text", "📄 Clean Template Preview", "🔀 Split View (Edit & Preview)"],
         horizontal=True,
         key="vault_editor_view_mode",
     )
@@ -161,7 +166,7 @@ else:
 new_res_name = st.text_input(
     "Name for New Resume Profile (Optional — used when clicking '➕ Save as New Resume'):",
     key="new_resume_name_input",
-    placeholder="e.g., SOC Analyst Resume, Cloud Security Resume, Red Team Resume...",
+    placeholder="e.g., Clinical Specialist Resume, Corporate Counsel Resume, Logistics Lead Resume, Security Analyst Resume...",
 )
 
 rc1, rc2, rc3 = st.columns(3)
@@ -201,8 +206,58 @@ with rc3:
         key=f"dl_vault_{safe_rname}",
     )
 
+with st.expander("🛡️ Check Resume Formatting & Scanner Compatibility", expanded=False):
+    st.caption("Checks your resume against automated scanner rules (ATS), section titles, character issues (like weird symbols), and formatting mistakes.")
+    lint_res = lint_ats_resume(current_vault_text)
+
+    col_l1, col_l2, col_l3 = st.columns([1.5, 2.0, 3.5])
+    with col_l1:
+        st.metric("ATS Health Score", f"{lint_res['score']}/100")
+    with col_l2:
+        st.metric("Grade", lint_res["grade"])
+    with col_l3:
+        st.caption(f"**Metrics:** {lint_res['total_words']} words · {lint_res['bullet_count']} bullets ({lint_res['metric_bullet_count']} quantified)")
+
+    if lint_res["issues"]:
+        for iss in lint_res["issues"]:
+            sev = iss.get("severity", "info")
+            if sev == "critical":
+                st.error(f"❌ **{iss['rule']}**: {iss['message']}")
+            elif sev == "warning":
+                st.warning(f"⚠️ **{iss['rule']}**: {iss['message']}")
+            else:
+                st.info(f"ℹ️ **{iss['rule']}**: {iss['message']}")
+
+        if st.button("✨ Auto-Fix Formatting Issues (Clean Up Dashes, Bullets & Dates)", key=f"btn_autofix_{safe_rname}", width="stretch"):
+            resumes_vault[selected_resume_name] = lint_res["clean_markdown"]
+            save_resumes(resumes_vault)
+            st.session_state["resumes_vault"] = resumes_vault
+            st.session_state["pending_resume_editor_text"] = lint_res["clean_markdown"]
+            st.toast("✅ Formatting cleaned up (standard hyphens, clean bullets, and standardized dates).")
+            st.rerun()
+    else:
+        st.success("🎉 Zero formatting issues detected! This resume is clean and easy for job scanners to read.")
+
 st.markdown("---")
-st.subheader("⚙️ Edit System Prompts")
+st.subheader("⚙️ AI Instructions & Presets")
+
+active_details = get_active_prompt_details()
+if active_details["mode"] == PROMPT_MODE_CUSTOM:
+    st.success("🟢 **Active in Job Review:** Evaluations currently use your **Custom Instructions**.", icon="✅")
+else:
+    col_stat, col_btn = st.columns([3.5, 1.5])
+    with col_stat:
+        st.info(
+            f"🧭 **Evaluator is currently using your Career Profile:** `{active_details['title']}`.\n\n"
+            "Edits below are saved to your Custom Instruction presets. To apply custom guidelines to the evaluator, click **Activate Custom Instructions**.",
+            icon="ℹ️"
+        )
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Activate Custom Instructions", type="primary", key="btn_activate_custom_prompt_top", width="stretch"):
+            set_active_prompt_mode(PROMPT_MODE_CUSTOM)
+            st.toast("🎯 Switched evaluation instructions to Custom Guidelines!", icon="✅")
+            st.rerun()
 
 if "preset_feedback" in st.session_state:
     fb_type, fb_msg = st.session_state.pop("preset_feedback")
@@ -314,6 +369,8 @@ with c2:
 
 with c3:
     if st.button("✅ Set as Active Custom Prompt", type="primary", width="stretch"):
+        save_custom_user_prompt(prompt_text)
+        set_active_prompt_mode(PROMPT_MODE_CUSTOM)
         st.session_state.system_instructions = prompt_text
-        atomic_write_text("custom_prompt.txt", prompt_text)
-        st.success("Active prompt updated! The evaluator will now use these instructions.")
+        st.success("Active prompt updated! The evaluator will now use these custom instructions.")
+        st.rerun()

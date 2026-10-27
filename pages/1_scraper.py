@@ -16,6 +16,8 @@ from utils import (
     check_and_handle_pipeline_completion,
     render_resume_selector,
     combine_selected_resumes,
+    render_active_prompt_indicator,
+    initialize_core_state,
 )
 import database as db
 from scraper import (
@@ -24,24 +26,19 @@ from scraper import (
     is_safe_url,
     search_linkedin_guest,
     search_freehire_jobs,
+    fetch_ats_board_jobs,
 )
 from posting_guard import guard as run_posting_guard
 from evaluator import evaluate_job
 from pipeline import pipeline_manager
+from sample_data import SAMPLE_JOBS
 
 if "system_instructions" not in st.session_state:
-    if os.path.exists("custom_prompt.txt"):
-        try:
-            with open("custom_prompt.txt", "r", encoding="utf-8") as f:
-                st.session_state.system_instructions = f.read()
-        except Exception:
-            st.session_state.system_instructions = "You are an advanced automated job-matching engine..."
-    else:
-        st.session_state.system_instructions = "You are an advanced automated job-matching engine..."
+    initialize_core_state()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ Settings & Filters")
-max_jobs = st.sidebar.slider("Max Postings to Evaluate", min_value=1, max_value=50, value=5, step=1)
+max_jobs = st.sidebar.slider("Max Jobs to Review", min_value=1, max_value=50, value=5, step=1)
 
 # Restore persisted scraper results if session state was cleared by page refresh
 if "native_search_results" not in st.session_state or not st.session_state["native_search_results"]:
@@ -85,16 +82,16 @@ def render_active_scraper_pipeline():
     status = pipeline_manager.get_status()
     if status.get("is_running") and status.get("source") == "Scraper":
         with st.container(border=True):
-            st.subheader("⚙️ Background Evaluation Pipeline Active")
+            st.subheader("⚙️ Reviewing Jobs in the Background...")
             total = max(status.get("total", 1), 1)
             completed = status.get("completed", 0)
             prog = min(completed / total, 1.0)
             cur = status.get("current_job", "Initializing...")
             if len(cur) > 60:
                 cur = cur[:57] + "..."
-            st.progress(prog, text=f"Evaluating ({completed}/{total}): {cur}")
-            st.info("💡 **Page persistence active:** You can freely switch to other pages (History, Metrics, etc.). Evaluation continues running in the background and you will be notified when complete!")
-            if st.button("🛑 Stop Pipeline", key="stop_scraper_pipeline_main"):
+            st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
+            st.info("💡 **You can freely explore other pages:** Reviewing continues in the background, and you'll be notified as soon as it's finished!")
+            if st.button("🛑 Stop Review", key="stop_scraper_pipeline_main"):
                 pipeline_manager.cancel()
                 st.rerun()
 
@@ -109,32 +106,80 @@ if "completion_batch" in st.session_state:
     )
     st.markdown("---")
 
+# Quick-Start Guide for first-time or new users
+show_quick_start = st.session_state.get("show_quick_start", False)
+dismissed = db.get_setting("dismissed_quick_start", "") == "true"
+has_evaluated_jobs = bool(db.load_job_urls())
+
+if (show_quick_start or not has_evaluated_jobs) and not dismissed:
+    with st.container(border=True):
+        col_qs_title, col_qs_dism = st.columns([5.5, 1])
+        with col_qs_title:
+            st.subheader("🎉 Welcome to Skippy! Quick-Start Guide")
+            st.write("Get your first tailored application in 3 simple steps:")
+        with col_qs_dism:
+            if st.button("✕ Dismiss", key="btn_dismiss_quick_start", help="Hide this guide"):
+                db.set_setting("dismissed_quick_start", "true")
+                st.session_state["show_quick_start"] = False
+                st.rerun()
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("##### 1. Find a Role")
+            st.caption("Search live postings on LinkedIn, company hiring pages (Greenhouse/Ashby), or paste any job link or text.")
+        with c2:
+            st.markdown("##### 2. Review with AI")
+            st.caption("Skippy checks your qualifications across 4 dimensions and spots red flags or dealbreakers upfront.")
+        with c3:
+            st.markdown("##### 3. Get Your Pack")
+            st.caption("In **Job History**, download your fact-checked ATS resume, custom cover letter, and STAR interview prep.")
+
+        st.markdown("")
+        col_demo, _ = st.columns([2.5, 4])
+        with col_demo:
+            if st.button("🧪 Try a Sample Job Listing", type="secondary", width="stretch", help="Pre-populates a sample job description so you can test the review engine immediately."):
+                sample_job = SAMPLE_JOBS[0]
+                st.session_state["manual_job_text_buffer"] = sample_job["text"]
+                st.session_state["selected_scraper_mode_idx"] = 1  # "📝 Paste Job Text"
+                st.toast(f"Loaded '{sample_job['title']}' sample job posting!", icon="📋")
+                st.rerun()
+
+    st.markdown("---")
+
+mode_options = [
+    "🔎 Job Board Search",
+    "📝 Paste Job Text",
+    "🌐 Paste Multiple Links",
+    "🧭 Search by Category",
+]
+default_mode_idx = st.session_state.pop("selected_scraper_mode_idx", 0)
+if default_mode_idx >= len(mode_options):
+    default_mode_idx = 0
+
 selected_mode = st.radio(
-    "Select Scraper Mode",
-    [
-        "🔎 Job Board Search",
-        "Paste a Job Description",
-        "Multi-URL Posting",
-        "Universal Search",
-    ],
+    "Choose How to Add Jobs:",
+    mode_options,
+    index=default_mode_idx,
     horizontal=True
 )
 
 
 def render_verified_sites_guide():
-    with st.expander("ℹ️ Supported Sites, Free Search APIs & Security Gate", expanded=False):
+    with st.expander("ℹ️ Supported Websites & Built-in Safety Shield", expanded=False):
         st.markdown("""
-        - **🔎 Job Board Search (100% Free, No Login / API Key Needed):**
-          - **LinkedIn Public Guest Search:** Search live LinkedIn postings by role, location, workplace mode (`Remote`/`Hybrid`/`On-site`), and recency without logging in.
-          - **FreeHire Global Tech Search:** Search tech & engineering postings worldwide with full job descriptions returned immediately.
-        - **🌐 Multi-URL & Universal Search:** Supports **Built In** (`builtin.com`), direct **LinkedIn** job URLs (`linkedin.com/jobs/view/...`), and public company career pages.
-        - **🧩 LinkedIn Evaluator (Fallback):** If LinkedIn ever rate-limits guest search or you prefer browsing logged-in, use the **🔗 LinkedIn Evaluator (Fallback)** submenu tucked under **Scraper** in the sidebar.
-        - **🛡️ Deterministic Posting Guard:** Every scraped or pasted job posting is automatically sanitized before reaching your AI model—stripping hidden CSS elements (`display:none`, `font-size:0`, `opacity:0`), invisible Unicode tampering characters, and flagging prompt-injection attempts at zero token cost.
+        - **🔎 Live Job Board Search (100% Free, No Login Needed):**
+          - **LinkedIn Public Search:** Search live postings by role, location, workplace mode (`Remote`/`Hybrid`/`On-site`), and recency without logging in.
+          - **Direct Company Career Pages:** Browse openings directly from company hiring boards (Greenhouse, Ashby, Lever).
+          - **FreeHire Tech Search:** Search tech & engineering postings worldwide with full job descriptions.
+        - **🌐 Multi-Link & Category Search:** Supports **Built In** (`builtin.com`), direct **LinkedIn** job links, and public company career pages.
+        - **🧩 LinkedIn Extension Inbox:** If you prefer browsing LinkedIn logged in, use the **🔗 LinkedIn Inbox** in the sidebar to capture jobs with a single right-click.
+        - **🛡️ Job Text Safety Shield:** Every job description is automatically cleaned to remove hidden text, invisible symbols, and malicious commands before sending to the AI.
         """)
 
 
 render_verified_sites_guide()
 render_resume_selector(key_suffix="scraper_page", in_sidebar=False)
+render_active_prompt_indicator()
 st.markdown("---")
 
 DATE_POSTED_MAP = {
@@ -146,29 +191,42 @@ DATE_POSTED_MAP = {
 }
 
 if selected_mode == "🔎 Job Board Search":
-    st.subheader("🔎 Native Job Board Search")
-    st.caption("Search live postings across LinkedIn and FreeHire for free—no account or extra API key required.")
+    st.subheader("🔎 Live Job Board Search")
+    st.caption("Search live postings across LinkedIn, Company Career Pages (Greenhouse, Ashby, Lever), and FreeHire—zero account or API keys required.")
 
     portal_choice = st.radio(
         "Job Portal Source:",
         [
-            "🔗 LinkedIn (Public Guest Search — Global & All Industries)",
-            "🌍 FreeHire (Global Tech & Engineering Aggregator — Instant Full Text)",
+            "🔗 LinkedIn (Global Search — No Login Needed)",
+            "🏢 Direct Company Hiring Pages (Greenhouse · Ashby · Lever — No Login)",
+            "🌍 FreeHire (Tech Jobs)",
         ],
         horizontal=True,
         key="native_portal_choice"
     )
 
     is_linkedin = portal_choice.startswith("🔗")
+    is_ats = portal_choice.startswith("🏢")
 
     if is_linkedin:
+        user_prof = st.session_state.get("user_profile")
+        if user_prof and user_prof.get("search_queries"):
+            st.caption(f"🎯 **Recommended Roles for Your Profile ({user_prof.get('industry_title') or user_prof.get('archetype_title', 'Industry')}):**")
+            rec_roles = user_prof.get("search_queries", [])[:4]
+            r_cols = st.columns(len(rec_roles))
+            for idx, r in enumerate(rec_roles):
+                with r_cols[idx]:
+                    if st.button(f"{r}", key=f"qf_compass_li_{idx}", width="stretch"):
+                        st.session_state["li_search_query"] = r
+                        st.rerun()
+
         with st.form("linkedin_guest_search_form"):
             col_q, col_loc = st.columns(2)
             with col_q:
                 li_query = st.text_input(
                     "Keywords / Role Title:",
-                    value=st.session_state.get("li_search_query", "Cybersecurity Analyst"),
-                    placeholder="e.g., SOC Analyst, Software Engineer, Data Scientist"
+                    value=st.session_state.get("li_search_query", ""),
+                    placeholder="e.g., Registered Nurse, Corporate Counsel, Operations Manager, SOC Analyst"
                 )
             with col_loc:
                 li_location = st.text_input(
@@ -209,7 +267,7 @@ if selected_mode == "🔎 Job Board Search":
                         )
                         db.record_seen_postings(results)
                         db.save_scraper_results(results, "LinkedIn Guest Search")
-                        st.session_state["native_search_results"] = results
+                        st.session_state["native_search_results"] = db.load_scraper_results()
                         st.session_state["native_search_source_label"] = "LinkedIn Guest Search"
                         st.session_state.pop("scraper_results_cleared", None)
                         if not results:
@@ -219,14 +277,98 @@ if selected_mode == "🔎 Job Board Search":
                     except Exception as e:
                         st.error(f"LinkedIn search failed: {e}")
 
+    elif is_ats:
+        st.caption("⚡ **Popular Company Career Boards (Click to Quick-Fill):**")
+        b1, b2, b3, b4 = st.columns(4)
+        with b1:
+            if st.button("🏢 Anthropic (GH)", key="ats_qf_anthropic", width="stretch"):
+                st.session_state["ats_board_input"] = "anthropic"
+                st.session_state["ats_platform_choice"] = "Greenhouse"
+                st.rerun()
+        with b2:
+            if st.button("🤖 OpenAI (Ashby)", key="ats_qf_openai", width="stretch"):
+                st.session_state["ats_board_input"] = "openai"
+                st.session_state["ats_platform_choice"] = "Ashby"
+                st.rerun()
+        with b3:
+            if st.button("🛡️ Palantir (Lever)", key="ats_qf_palantir", width="stretch"):
+                st.session_state["ats_board_input"] = "palantir"
+                st.session_state["ats_platform_choice"] = "Lever"
+                st.rerun()
+        with b4:
+            if st.button("💳 Stripe (GH)", key="ats_qf_stripe", width="stretch"):
+                st.session_state["ats_board_input"] = "stripe"
+                st.session_state["ats_platform_choice"] = "Greenhouse"
+                st.rerun()
+
+        with st.form("ats_board_search_form"):
+            col_b, col_p, col_lim = st.columns([2, 1, 1])
+            with col_b:
+                board_input = st.text_input(
+                    "Company Board Slug or URL:",
+                    value=st.session_state.get("ats_board_input", ""),
+                    placeholder="e.g. anthropic, jobs.ashbyhq.com/openai, or boards.greenhouse.io/gitlab",
+                    help="Enter the company name slug or paste the direct career board link."
+                )
+            with col_p:
+                plat_options = ["Auto-Detect", "Greenhouse", "Ashby", "Lever"]
+                curr_plat = st.session_state.get("ats_platform_choice", "Auto-Detect")
+                p_idx = plat_options.index(curr_plat) if curr_plat in plat_options else 0
+                ats_platform = st.selectbox("ATS Platform:", plat_options, index=p_idx)
+            with col_lim:
+                ats_limit = st.selectbox("Max Roles:", [15, 30, 50, 100], index=1)
+
+            ats_submitted = st.form_submit_button("🔍 Load Company Job Openings", type="primary", width="stretch")
+
+        if ats_submitted:
+            st.session_state["ats_board_input"] = board_input
+            st.session_state["ats_platform_choice"] = ats_platform
+            if not board_input.strip():
+                st.warning("Please provide a company board name slug or career board URL.")
+            else:
+                with st.spinner(f"Loading public openings for '{board_input.strip()}'..."):
+                    try:
+                        eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
+                        seen_urls, seen_li_ids = db.load_seen_job_identifiers()
+                        results = fetch_ats_board_jobs(
+                            platform=ats_platform.lower(),
+                            token_or_url=board_input.strip(),
+                            limit=int(ats_limit),
+                            evaluated_urls=eval_urls,
+                            seen_urls=seen_urls,
+                        )
+                        if not results:
+                            st.info(f"No active postings found for board '{board_input.strip()}'. Verify the slug or try a direct board URL.")
+                        else:
+                            db.record_seen_postings(results)
+                            source_lbl = results[0].get("source", f"ATS ({board_input.strip()})")
+                            db.save_scraper_results(results, source_lbl)
+                            st.session_state["native_search_results"] = db.load_scraper_results()
+                            st.session_state["native_search_source_label"] = source_lbl
+                            st.session_state.pop("scraper_results_cleared", None)
+                            st.switch_page("pages/7_scraper_results.py")
+                    except Exception as e:
+                        st.error(f"Failed to load career board: {e}")
+
     else:
+        user_prof = st.session_state.get("user_profile")
+        if user_prof and user_prof.get("search_queries"):
+            st.caption(f"🎯 **Recommended Roles for Your Profile ({user_prof.get('industry_title') or user_prof.get('archetype_title', 'Industry')}):**")
+            rec_roles = user_prof.get("search_queries", [])[:4]
+            r_cols = st.columns(len(rec_roles))
+            for idx, r in enumerate(rec_roles):
+                with r_cols[idx]:
+                    if st.button(f"{r}", key=f"qf_compass_fh_{idx}", width="stretch"):
+                        st.session_state["fh_search_query"] = r
+                        st.rerun()
+
         with st.form("freehire_search_form"):
             col_q, col_reg, col_sen = st.columns([2, 1, 1])
             with col_q:
                 fh_query = st.text_input(
-                    "Keywords / Tech Stack / Role:",
-                    value=st.session_state.get("fh_search_query", "Security Engineer"),
-                    placeholder="e.g., Security, Python, Backend, DevOps, AI Engineer"
+                    "Keywords / Domain Stack / Role:",
+                    value=st.session_state.get("fh_search_query", ""),
+                    placeholder="e.g., Operations, Healthcare, Legal, Python, Security, Supply Chain"
                 )
             with col_reg:
                 fh_region = st.selectbox(
@@ -251,7 +393,7 @@ if selected_mode == "🔎 Job Board Search":
 
         if search_submitted:
             st.session_state["fh_search_query"] = fh_query
-            with st.spinner("Querying FreeHire API (with full job descriptions)..."):
+            with st.spinner("Searching FreeHire jobs (with full descriptions)..."):
                 try:
                     eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
                     seen_urls, seen_li_ids = db.load_seen_job_identifiers()
@@ -267,7 +409,7 @@ if selected_mode == "🔎 Job Board Search":
                     )
                     db.record_seen_postings(results)
                     db.save_scraper_results(results, "FreeHire API")
-                    st.session_state["native_search_results"] = results
+                    st.session_state["native_search_results"] = db.load_scraper_results()
                     st.session_state["native_search_source_label"] = "FreeHire API"
                     st.session_state.pop("scraper_results_cleared", None)
                     if not results:
@@ -291,29 +433,30 @@ if selected_mode == "🔎 Job Board Search":
         col_info, col_btn = st.columns([3, 1.4])
         with col_info:
             if discovered_jobs:
-                st.subheader("📋 Scraper Results Available")
-                st.write(f"You have **{len(discovered_jobs)}** discovered postings loaded in your results queue. Review, filter, and evaluate them on the dedicated **Scraper Results** page.")
+                st.subheader("📋 Search Results Available")
+                st.write(f"You have **{len(discovered_jobs)}** jobs loaded in your search results. Review, filter, and choose which ones to score on the **Search Results** page.")
             else:
                 st.subheader("⚡ Quick Navigation & Extension Fallback")
-                st.write("Browse results from previous searches, or use the **LinkedIn Evaluator (Fallback)** queue if LinkedIn guest search is ever rate-limited.")
+                st.write("Browse results from previous searches, or use the **LinkedIn Inbox** if you prefer sending jobs directly from LinkedIn.")
         with col_btn:
-            if st.button("👉 Open Scraper Results", type="primary" if discovered_jobs else "secondary", width="stretch", key="btn_goto_results_banner"):
+            if st.button("Open Search Results", type="primary" if discovered_jobs else "secondary", width="stretch", key="btn_goto_results_banner"):
                 st.switch_page("pages/7_scraper_results.py")
-            if st.button("🔗 LinkedIn Evaluator (Fallback)", width="stretch", key="btn_goto_linkedin_fallback"):
+            if st.button("🔗 LinkedIn Inbox", width="stretch", key="btn_goto_linkedin_fallback"):
                 st.switch_page("pages/5_linkedin.py")
 
-elif selected_mode == "Paste a Job Description":
-    st.subheader("📝 Paste a Job Description")
-    st.caption("🛡️ Protected by **Posting Guard**: invisible Unicode tampering and prompt-injection lines are automatically stripped and flagged.")
+elif selected_mode == "📝 Paste Job Text":
+    st.subheader("📝 Paste Job Text")
+    st.caption("🛡️ Protected by **Job Text Safety Shield**: hidden text, invisible symbols, and malicious commands are automatically removed.")
+    prefill_job_text = st.session_state.pop("manual_job_text_buffer", "")
     with st.form("manual_paste_form"):
-        job_description = st.text_area("Paste Job Description Here:", height=250)
-        submitted = st.form_submit_button("Evaluate Posting", type="primary")
+        job_description = st.text_area("Paste Job Description Here:", value=prefill_job_text, height=250)
+        submitted = st.form_submit_button("Review Job with AI", type="primary")
 
     if submitted:
         if not job_description.strip() or not st.session_state.resume_text.strip():
             st.warning("Please provide both the master resume and job description.")
         else:
-            with st.spinner("Running Posting Guard & analyzing alignment with AI..."):
+            with st.spinner("Checking safety & analyzing alignment with AI..."):
                 try:
                     cleaned_job_text, guard_findings = run_posting_guard(job_description, mode="auto")
                     sec_flags = list(guard_findings.get("security_flags") or [])
@@ -337,7 +480,7 @@ elif selected_mode == "Paste a Job Description":
                         "Position": result.position_name,
                         "Company": resolved_company,
                         "Deadline": result.application_deadline or "",
-                        "URL": f"Manual_Paste_{int(time.time())}",
+                        "URL": f"Manual_Paste_{int(time.time() * 1000)}",
                         "Eligible": result.is_eligible,
                         "Disqualification Reason": result.disqualification_reason,
                         "Score": result.match_score,
@@ -365,24 +508,25 @@ elif selected_mode == "Paste a Job Description":
                 except Exception as e:
                     st.error(f"Error evaluating posting: {e}")
 
-elif selected_mode == "Multi-URL Posting":
-    st.subheader("🌐 Multi-URL Posting")
-    st.caption("Paste individual job URLs (one per line). Supports **Built In**, **LinkedIn (`linkedin.com/jobs/view/...`)**, and public company career pages.")
+elif selected_mode == "🌐 Paste Multiple Links":
+    st.subheader("🌐 Paste Multiple Links")
+    st.caption("Paste individual job web links (one per line). Supports **Built In**, **LinkedIn (`linkedin.com/jobs/view/...`)**, and company career pages.")
     
     col_samp, _ = st.columns([3, 7])
     with col_samp:
         if st.button("📋 Load Sample BuiltIn URLs", key="btn_sample_urls"):
             st.session_state["batch_urls_input"] = (
-                "https://builtin.com/job/cyber-security/information-security-analyst/224561\n"
+                "https://builtin.com/job/operations/operations-manager/224560\n"
+                "https://builtin.com/job/healthtech/clinical-specialist/224561\n"
                 "https://builtin.com/job/developer/software-engineer/224562\n"
-                "https://builtin.com/job/devops/cloud-engineer/224563"
+                "https://builtin.com/job/cyber-security/information-security-analyst/224563"
             )
             st.rerun()
 
     sample_val = st.session_state.get("batch_urls_input", "")
     with st.form("batch_url_form"):
         urls_input = st.text_area("Job URLs (one per line):", value=sample_val, height=150)
-        submitted = st.form_submit_button("Scrape & Evaluate All URLs", type="primary")
+        submitted = st.form_submit_button("Review All Job Links", type="primary")
         
     if submitted:
         all_urls = [u.strip() for u in urls_input.splitlines() if u.strip()]
@@ -409,27 +553,41 @@ elif selected_mode == "Multi-URL Posting":
                 else:
                     process_evaluations(new_urls[:max_jobs])
 
-elif selected_mode == "Universal Search":
-    st.subheader("🧭 Universal Search")
-    st.caption("⚡ **Quick-Fill Built In Search Categories:**")
+elif selected_mode == "🧭 Search by Category":
+    st.subheader("🧭 Search by Category")
+    st.caption("⚡ **Browse Popular Career Categories:**")
     col_p1, col_p2, col_p3 = st.columns(3)
     with col_p1:
-        if st.button("🏢 Built In: Cybersecurity", key="preset_builtin_cyber", width="stretch"):
-            st.session_state["search_url_preset"] = "https://builtin.com/jobs/cyber-security/entry-level"
+        if st.button("🏥 Healthcare / Biotech", key="preset_builtin_health", width="stretch"):
+            st.session_state["search_url_preset"] = "https://builtin.com/jobs/healthtech/entry-level"
             st.rerun()
     with col_p2:
-        if st.button("💻 Built In: Software Engineering", key="preset_builtin_dev", width="stretch"):
-            st.session_state["search_url_preset"] = "https://builtin.com/jobs/dev-engineering/entry-level"
+        if st.button("💼 Operations & HR", key="preset_builtin_ops", width="stretch"):
+            st.session_state["search_url_preset"] = "https://builtin.com/jobs/operations/entry-level"
             st.rerun()
     with col_p3:
-        if st.button("☁️ Built In: Cloud & DevOps", key="preset_builtin_cloud", width="stretch"):
+        if st.button("📊 Data & Analytics", key="preset_builtin_data", width="stretch"):
+            st.session_state["search_url_preset"] = "https://builtin.com/jobs/data-analytics/entry-level"
+            st.rerun()
+
+    col_p4, col_p5, col_p6 = st.columns(3)
+    with col_p4:
+        if st.button("🛡️ Cybersecurity", key="preset_builtin_cyber", width="stretch"):
+            st.session_state["search_url_preset"] = "https://builtin.com/jobs/cyber-security/entry-level"
+            st.rerun()
+    with col_p5:
+        if st.button("💻 Software Engineering", key="preset_builtin_dev", width="stretch"):
+            st.session_state["search_url_preset"] = "https://builtin.com/jobs/dev-engineering/entry-level"
+            st.rerun()
+    with col_p6:
+        if st.button("☁️ Cloud & DevOps", key="preset_builtin_cloud", width="stretch"):
             st.session_state["search_url_preset"] = "https://builtin.com/jobs/devops-cloud/entry-level"
             st.rerun()
 
-    preset_search = st.session_state.get("search_url_preset", "https://builtin.com/jobs/cyber-security/entry-level")
+    preset_search = st.session_state.get("search_url_preset", "https://builtin.com/jobs/operations/entry-level")
     with st.form("search_form"):
-        search_url = st.text_input("Search URL:", value=preset_search, placeholder="https://builtin.com/jobs/cyber-security/entry-level")
-        submitted = st.form_submit_button("Auto-Discover & Evaluate Jobs", type="primary")
+        search_url = st.text_input("Search URL:", value=preset_search, placeholder="https://builtin.com/jobs/... or any job board search URL")
+        submitted = st.form_submit_button("Find & Review Jobs", type="primary")
         
     if submitted:
         clean_search = search_url.strip()

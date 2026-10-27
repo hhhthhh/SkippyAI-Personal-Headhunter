@@ -82,9 +82,23 @@ GOTO LaunchApp
 :: LAUNCH SEQUENCE (Runs every time)
 :: =======================================================
 :LaunchApp
-:: Suppress Streamlit email prompt cleanly
+:: Suppress Streamlit email prompt and usage telemetry cleanly
+set STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 set LITELLM_DISABLE_REDACT_SECRETS=true
 set LITELLM_LOCAL_MODEL_COST_MAP=True
+
+:: Ensure template prompt files are initialized
+if not exist "custom_prompt.txt" (
+    if exist "custom_prompt.template.txt" (
+        copy /y "custom_prompt.template.txt" "custom_prompt.txt" >nul
+    )
+)
+if not exist "custom_user_prompt.txt" (
+    if exist "custom_prompt.template.txt" (
+        copy /y "custom_prompt.template.txt" "custom_user_prompt.txt" >nul
+    )
+)
+
 mkdir "%USERPROFILE%\.streamlit" 2>nul
 if not exist "%USERPROFILE%\.streamlit\credentials.toml" (
     echo [general] > "%USERPROFILE%\.streamlit\credentials.toml"

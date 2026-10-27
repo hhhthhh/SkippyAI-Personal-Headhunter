@@ -50,9 +50,24 @@ if not exist "skippy.db" type nul > "skippy.db"
 if not exist ".env" type nul > ".env"
 if not exist "resume.md" type nul > "resume.md"
 if not exist "resumes.json" echo {} > "resumes.json"
-if not exist "custom_prompt.txt" type nul > "custom_prompt.txt"
+if not exist "custom_prompt.txt" (
+    if exist "custom_prompt.template.txt" (
+        copy /y "custom_prompt.template.txt" "custom_prompt.txt" >nul
+    ) else (
+        type nul > "custom_prompt.txt"
+    )
+)
+if not exist "custom_user_prompt.txt" (
+    if exist "custom_prompt.template.txt" (
+        copy /y "custom_prompt.template.txt" "custom_user_prompt.txt" >nul
+    ) else (
+        type nul > "custom_user_prompt.txt"
+    )
+)
+if not exist "profile_alignment.json" echo {} > "profile_alignment.json"
 if not exist "inbox.json" echo [] > "inbox.json"
 if not exist "prompt_presets.json" echo {} > "prompt_presets.json"
+if not exist "app_settings.json" echo {} > "app_settings.json"
 
 echo Building and starting the Skippy container...
 %DOCKER_COMPOSE% up -d --build
@@ -64,8 +79,8 @@ IF %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo Waiting for Skippy web interface to start...
-timeout /t 3 >nul
+echo Waiting for Skippy web interface to become ready...
+powershell -command "for ($i=0; $i -lt 30; $i++) { try { $r = Invoke-WebRequest -Uri 'http://localhost:8501' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { break } } catch {}; Start-Sleep -Seconds 1 }"
 
 echo.
 echo =======================================================

@@ -2,10 +2,14 @@ import sqlite3
 import os
 import json
 import re
+import time
 from datetime import datetime
+from functools import lru_cache
 
 DB_FILE = "skippy.db"
 DB_PATH = "skippy.db"
+PROFILE_JSON_FILE = "profile_alignment.json"
+SETTINGS_JSON_FILE = "app_settings.json"
 
 # Strict whitelist of allowable columns to completely eliminate SQL injection
 ALLOWED_UPDATE_FIELDS = frozenset({
@@ -36,6 +40,9 @@ ALLOWED_UPDATE_FIELDS = frozenset({
     "Reviewer Audit",
     "Matched Resumes",
     "Status Updated",
+    "Outreach Message",
+    "Company Intel",
+    "Applied Date",
     "Source"
 })
 
@@ -169,6 +176,9 @@ def init_db():
                 "Reviewer Audit" TEXT DEFAULT "",
                 "Matched Resumes" TEXT DEFAULT "",
                 "Status Updated" TEXT DEFAULT "",
+                "Outreach Message" TEXT DEFAULT "",
+                "Company Intel" TEXT DEFAULT "",
+                "Applied Date" TEXT DEFAULT "",
                 "Source" TEXT
             )
         ''')
@@ -200,41 +210,108 @@ def init_db():
                 "scraped_at" TEXT DEFAULT ""
             )
         ''')
+
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS user_profile (
+                "id" TEXT PRIMARY KEY,
+                "primary_domain" TEXT DEFAULT "trades_construction",
+                "secondary_domain" TEXT DEFAULT "",
+                "primary_title" TEXT DEFAULT "",
+                "secondary_title" TEXT DEFAULT "",
+                "archetype_title" TEXT DEFAULT "",
+                "archetype_description" TEXT DEFAULT "",
+                "scores_json" TEXT DEFAULT "{}",
+                "keywords_json" TEXT DEFAULT "[]",
+                "custom_skills_json" TEXT DEFAULT "[]",
+                "search_queries_json" TEXT DEFAULT "[]",
+                "compliance_gates_json" TEXT DEFAULT "[]",
+                "adapted_prompt" TEXT DEFAULT "",
+                "updated_at" TEXT DEFAULT "",
+                "ai_synthesized" INTEGER DEFAULT 0,
+                "rubric_focus" TEXT DEFAULT ""
+            )
+        ''')
+
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS app_settings (
+                "key" TEXT PRIMARY KEY,
+                "value" TEXT DEFAULT "",
+                "updated_at" TEXT DEFAULT ""
+            )
+        ''')
         
-        # Gracefully upgrade existing databases to include new columns
+        # Gracefully upgrade existing databases to include new columns (checking schema first to avoid repeated exception overhead)
+        c.execute('PRAGMA table_info(jobs)')
+        existing_job_cols = {row[1] for row in c.fetchall()}
+        c.execute('PRAGMA table_info(user_profile)')
+        existing_prof_cols = {row[1] for row in c.fetchall()}
+
         migrations = [
-            ('ALTER TABLE jobs ADD COLUMN "Source" TEXT DEFAULT "Manual"'),
-            ('ALTER TABLE jobs ADD COLUMN "Company" TEXT DEFAULT ""'),
-            ('ALTER TABLE jobs ADD COLUMN "Deadline" TEXT DEFAULT ""'),
-            ('ALTER TABLE jobs ADD COLUMN "Technical Score" INTEGER DEFAULT 0'),
-            ('ALTER TABLE jobs ADD COLUMN "Experience Score" INTEGER DEFAULT 0'),
-            ('ALTER TABLE jobs ADD COLUMN "Behavioral Score" INTEGER DEFAULT 0'),
-            ('ALTER TABLE jobs ADD COLUMN "Career Score" INTEGER DEFAULT 0'),
-            ('ALTER TABLE jobs ADD COLUMN "Location Gate" TEXT DEFAULT "PASS"'),
-            ('ALTER TABLE jobs ADD COLUMN "Eligibility Gate" TEXT DEFAULT "PASS"'),
-            ('ALTER TABLE jobs ADD COLUMN "Application QA" TEXT DEFAULT ""'),
-            ('ALTER TABLE jobs ADD COLUMN "Followup Note" TEXT DEFAULT ""'),
-            ('ALTER TABLE jobs ADD COLUMN "Reviewer Audit" TEXT DEFAULT ""'),
-            ('ALTER TABLE jobs ADD COLUMN "Matched Resumes" TEXT DEFAULT ""'),
-            ('ALTER TABLE jobs ADD COLUMN "Status Updated" TEXT DEFAULT ""'),
+            ("jobs", "Source", 'ALTER TABLE jobs ADD COLUMN "Source" TEXT DEFAULT "Manual"'),
+            ("jobs", "Company", 'ALTER TABLE jobs ADD COLUMN "Company" TEXT DEFAULT ""'),
+            ("jobs", "Deadline", 'ALTER TABLE jobs ADD COLUMN "Deadline" TEXT DEFAULT ""'),
+            ("jobs", "Technical Score", 'ALTER TABLE jobs ADD COLUMN "Technical Score" INTEGER DEFAULT 0'),
+            ("jobs", "Experience Score", 'ALTER TABLE jobs ADD COLUMN "Experience Score" INTEGER DEFAULT 0'),
+            ("jobs", "Behavioral Score", 'ALTER TABLE jobs ADD COLUMN "Behavioral Score" INTEGER DEFAULT 0'),
+            ("jobs", "Career Score", 'ALTER TABLE jobs ADD COLUMN "Career Score" INTEGER DEFAULT 0'),
+            ("jobs", "Location Gate", 'ALTER TABLE jobs ADD COLUMN "Location Gate" TEXT DEFAULT "PASS"'),
+            ("jobs", "Eligibility Gate", 'ALTER TABLE jobs ADD COLUMN "Eligibility Gate" TEXT DEFAULT "PASS"'),
+            ("jobs", "Application QA", 'ALTER TABLE jobs ADD COLUMN "Application QA" TEXT DEFAULT ""'),
+            ("jobs", "Followup Note", 'ALTER TABLE jobs ADD COLUMN "Followup Note" TEXT DEFAULT ""'),
+            ("jobs", "Reviewer Audit", 'ALTER TABLE jobs ADD COLUMN "Reviewer Audit" TEXT DEFAULT ""'),
+            ("jobs", "Matched Resumes", 'ALTER TABLE jobs ADD COLUMN "Matched Resumes" TEXT DEFAULT ""'),
+            ("jobs", "Status Updated", 'ALTER TABLE jobs ADD COLUMN "Status Updated" TEXT DEFAULT ""'),
+            ("jobs", "Outreach Message", 'ALTER TABLE jobs ADD COLUMN "Outreach Message" TEXT DEFAULT ""'),
+            ("jobs", "Company Intel", 'ALTER TABLE jobs ADD COLUMN "Company Intel" TEXT DEFAULT ""'),
+            ("jobs", "Applied Date", 'ALTER TABLE jobs ADD COLUMN "Applied Date" TEXT DEFAULT ""'),
+            ("user_profile", "ai_synthesized", 'ALTER TABLE user_profile ADD COLUMN "ai_synthesized" INTEGER DEFAULT 0'),
+            ("user_profile", "rubric_focus", 'ALTER TABLE user_profile ADD COLUMN "rubric_focus" TEXT DEFAULT ""'),
+            ("user_profile", "custom_skills_json", 'ALTER TABLE user_profile ADD COLUMN "custom_skills_json" TEXT DEFAULT "[]"'),
         ]
-        for stmt in migrations:
+        for tbl, col, stmt in migrations:
+            cols = existing_prof_cols if tbl == "user_profile" else existing_job_cols
+            if col not in cols:
+                try:
+                    c.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass
+
+        # Secondary indexes for fast filtering, history sorting, and repost lookups
+        indexes = [
+            'CREATE INDEX IF NOT EXISTS idx_jobs_company_lower ON jobs(LOWER("Company"));',
+            'CREATE INDEX IF NOT EXISTS idx_jobs_timestamp ON jobs("Timestamp" DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs("Application Status");',
+            'CREATE INDEX IF NOT EXISTS idx_seen_company_lower ON seen_postings(LOWER("company"));',
+            'CREATE INDEX IF NOT EXISTS idx_scraper_company_lower ON scraper_results(LOWER("company"));',
+            'CREATE INDEX IF NOT EXISTS idx_seen_url ON seen_postings("url");',
+        ]
+        for idx_stmt in indexes:
             try:
-                c.execute(stmt)
+                c.execute(idx_stmt)
             except sqlite3.OperationalError:
-                pass  # Column already exists
+                pass
             
         conn.commit()
+        clear_repost_cache()
     finally:
         conn.close()
     _secure_db_file_permissions()
 
-def load_all_jobs():
+SUMMARY_COLUMNS = (
+    '"URL", "Timestamp", "Position", "Company", "Deadline", "Eligible", '
+    '"Disqualification Reason", "Score", "Technical Score", "Experience Score", '
+    '"Behavioral Score", "Career Score", "Location Gate", "Eligibility Gate", '
+    '"Summary", "Matching Skills", "Missing Skills", "Red Flags", '
+    '"Application Status", "Matched Resumes", "Status Updated", "Applied Date", "Source"'
+)
+
+def load_all_jobs(summary_only: bool = False):
     conn = get_connection()
     try:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute('SELECT * FROM jobs ORDER BY rowid DESC')
+        query = f'SELECT {SUMMARY_COLUMNS} FROM jobs ORDER BY rowid DESC' if summary_only else 'SELECT * FROM jobs ORDER BY rowid DESC'
+        cur.execute(query)
         rows = cur.fetchall()
         int_cols = ("Score", "Technical Score", "Experience Score", "Behavioral Score", "Career Score")
         records = []
@@ -258,6 +335,246 @@ def load_all_jobs():
     finally:
         conn.close()
     return records
+
+def load_jobs_summary():
+    """Loads lightweight job metadata without heavy text columns (resumes, cover letters, raw text)."""
+    return load_all_jobs(summary_only=True)
+
+
+def save_user_profile(profile_data: dict) -> bool:
+    """Persists the user's career compass profile to SQLite and local JSON backup."""
+    if not profile_data or not isinstance(profile_data, dict):
+        return False
+
+    # Write JSON fallback
+    try:
+        atomic_write_json(PROFILE_JSON_FILE, profile_data)
+    except Exception:
+        pass
+
+    conn = get_connection()
+    try:
+        now_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        arch_title = profile_data.get("industry_title") or profile_data.get("archetype_title", "")
+        arch_desc = profile_data.get("industry_description") or profile_data.get("archetype_description", "")
+        with conn:
+            conn.execute('''
+                INSERT INTO user_profile (
+                    "id", "primary_domain", "secondary_domain", "primary_title", "secondary_title",
+                    "archetype_title", "archetype_description", "scores_json", "keywords_json",
+                    "custom_skills_json", "search_queries_json", "compliance_gates_json",
+                    "adapted_prompt", "updated_at", "ai_synthesized", "rubric_focus"
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT("id") DO UPDATE SET
+                    "primary_domain" = excluded."primary_domain",
+                    "secondary_domain" = excluded."secondary_domain",
+                    "primary_title" = excluded."primary_title",
+                    "secondary_title" = excluded."secondary_title",
+                    "archetype_title" = excluded."archetype_title",
+                    "archetype_description" = excluded."archetype_description",
+                    "scores_json" = excluded."scores_json",
+                    "keywords_json" = excluded."keywords_json",
+                    "custom_skills_json" = excluded."custom_skills_json",
+                    "search_queries_json" = excluded."search_queries_json",
+                    "compliance_gates_json" = excluded."compliance_gates_json",
+                    "adapted_prompt" = excluded."adapted_prompt",
+                    "updated_at" = excluded."updated_at",
+                    "ai_synthesized" = excluded."ai_synthesized",
+                    "rubric_focus" = excluded."rubric_focus"
+            ''', (
+                "default_user",
+                profile_data.get("primary_domain", ""),
+                profile_data.get("secondary_domain", "") or "",
+                profile_data.get("primary_title", ""),
+                profile_data.get("secondary_title", ""),
+                arch_title,
+                arch_desc,
+                json.dumps(profile_data.get("scores", {})),
+                json.dumps(profile_data.get("keywords", [])),
+                json.dumps(profile_data.get("custom_skills", [])),
+                json.dumps(profile_data.get("search_queries", [])),
+                json.dumps(profile_data.get("compliance_gates", [])),
+                profile_data.get("adapted_prompt", ""),
+                now_ts,
+                1 if profile_data.get("ai_synthesized") else 0,
+                profile_data.get("rubric_focus", "")
+            ))
+        return True
+    except Exception as e:
+        print(f"[Database Error] User profile save failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def load_user_profile() -> dict | None:
+    """Loads the user's career compass profile from SQLite, falling back to local JSON if present."""
+    conn = get_connection()
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM user_profile WHERE "id" = ?', ("default_user",))
+        row = cur.fetchone()
+        if row:
+            d = dict(row)
+            arch_title = d.get("archetype_title", "")
+            arch_desc = d.get("archetype_description", "")
+            return {
+                "primary_domain": d.get("primary_domain", ""),
+                "secondary_domain": d.get("secondary_domain", "") or None,
+                "primary_title": d.get("primary_title", ""),
+                "secondary_title": d.get("secondary_title", ""),
+                "industry_title": arch_title,
+                "archetype_title": arch_title,
+                "industry_description": arch_desc,
+                "archetype_description": arch_desc,
+                "scores": json.loads(d.get("scores_json") or "{}"),
+                "keywords": json.loads(d.get("keywords_json") or "[]"),
+                "custom_skills": json.loads(d.get("custom_skills_json") or "[]"),
+                "search_queries": json.loads(d.get("search_queries_json") or "[]"),
+                "compliance_gates": json.loads(d.get("compliance_gates_json") or "[]"),
+                "adapted_prompt": d.get("adapted_prompt", ""),
+                "updated_at": d.get("updated_at", ""),
+                "ai_synthesized": bool(d.get("ai_synthesized", 0)),
+                "rubric_focus": d.get("rubric_focus", ""),
+            }
+    except Exception as e:
+        print(f"[Database Warning] Profile load from DB failed, trying JSON fallback: {e}")
+    finally:
+        conn.close()
+
+    if os.path.exists(PROFILE_JSON_FILE):
+        try:
+            with open(PROFILE_JSON_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    data.setdefault("custom_skills", [])
+                    # Self-heal SQLite database if row was missing or cleared
+                    try:
+                        save_user_profile(data)
+                    except Exception:
+                        pass
+                    return data
+        except Exception:
+            pass
+    return None
+
+
+def get_setting(key: str, default: str = "") -> str:
+    """Retrieves an application setting from SQLite, falling back to app_settings.json if present."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT "value" FROM app_settings WHERE "key" = ?', (key,))
+        row = cur.fetchone()
+        if row is not None and row[0] is not None:
+            return str(row[0])
+    except Exception as e:
+        print(f"[Database Warning] Error loading setting '{key}' from DB: {e}")
+    finally:
+        conn.close()
+
+    # JSON fallback
+    if os.path.exists(SETTINGS_JSON_FILE):
+        try:
+            with open(SETTINGS_JSON_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and key in data:
+                    return str(data[key])
+        except Exception:
+            pass
+
+    return default
+
+
+def set_setting(key: str, value: str) -> bool:
+    """Persists an application setting to SQLite and app_settings.json atomically."""
+    clean_val = str(value)
+    now_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # Update JSON fallback
+    settings_data = {}
+    if os.path.exists(SETTINGS_JSON_FILE):
+        try:
+            with open(SETTINGS_JSON_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    settings_data = loaded
+        except Exception:
+            settings_data = {}
+    settings_data[key] = clean_val
+    try:
+        atomic_write_json(SETTINGS_JSON_FILE, settings_data)
+    except Exception:
+        pass
+
+    conn = get_connection()
+    try:
+        with conn:
+            conn.execute('''
+                INSERT INTO app_settings ("key", "value", "updated_at")
+                VALUES (?, ?, ?)
+                ON CONFLICT("key") DO UPDATE SET
+                    "value" = excluded."value",
+                    "updated_at" = excluded."updated_at"
+            ''', (key, clean_val, now_ts))
+        return True
+    except Exception as e:
+        print(f"[Database Error] Error saving setting '{key}': {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def is_onboarding_completed() -> bool:
+    """
+    Returns True if onboarding was previously marked completed,
+    or if user has existing resumes, profile, or job records.
+    Automatically marks onboarding completed if existing data is detected.
+    """
+    flag = get_setting("onboarding_completed", "")
+    if flag.lower() in ("true", "1", "yes"):
+        return True
+
+    # Retroactive detection: if user already has resumes, profile, or jobs, auto-mark completed
+    try:
+        if os.path.exists("resumes.json"):
+            with open("resumes.json", "r", encoding="utf-8") as f:
+                rdata = json.load(f)
+                if isinstance(rdata, dict) and any(str(v).strip() for v in rdata.values()):
+                    mark_onboarding_completed()
+                    return True
+        if os.path.exists("resume.md") and os.path.getsize("resume.md") > 20:
+            mark_onboarding_completed()
+            return True
+        if os.path.exists("profile_alignment.json") and os.path.getsize("profile_alignment.json") > 20:
+            mark_onboarding_completed()
+            return True
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM jobs")
+            row = cur.fetchone()
+            if row and row[0] > 0:
+                mark_onboarding_completed()
+                return True
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    return False
+
+
+def mark_onboarding_completed() -> bool:
+    """Persists onboarding_completed flag to SQLite and app_settings.json."""
+    return set_setting("onboarding_completed", "true")
+
+
+def reset_onboarding_status() -> bool:
+    """Allows a user to explicitly reset their onboarding status if they want to re-run setup."""
+    return set_setting("onboarding_completed", "false")
+
 
 def load_job_urls() -> set:
     conn = get_connection()
@@ -395,6 +712,7 @@ def record_seen_postings(postings: list[dict]) -> None:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', records)
         conn.commit()
+        clear_repost_cache()
     except Exception as e:
         print(f"[Database Error] Failed to record seen postings: {e}")
     finally:
@@ -408,6 +726,7 @@ def clear_seen_postings() -> None:
     try:
         with conn:
             conn.execute("DELETE FROM seen_postings")
+        clear_repost_cache()
     finally:
         conn.close()
 
@@ -447,8 +766,8 @@ def classify_posting(
     return "new"
 
 
-def save_scraper_results(postings: list[dict], source_label: str = "") -> None:
-    """Atomically replaces the persisted active scraper results with a new batch."""
+def save_scraper_results(postings: list[dict], source_label: str = "", clear_existing: bool = False) -> None:
+    """Persists or appends active scraper results to `scraper_results`."""
     conn = get_connection()
     try:
         now_ts = datetime.now().isoformat()
@@ -475,12 +794,27 @@ def save_scraper_results(postings: list[dict], source_label: str = "") -> None:
                 now_ts
             ))
         with conn:
-            conn.execute("DELETE FROM scraper_results")
+            if clear_existing:
+                conn.execute("DELETE FROM scraper_results")
             conn.executemany('''
-                INSERT OR REPLACE INTO scraper_results
+                INSERT INTO scraper_results
                 ("id", "url", "title", "company", "location", "date", "source", "status", "payload_json", "scraped_at")
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT("id") DO UPDATE SET
+                    "url" = excluded."url",
+                    "title" = excluded."title",
+                    "company" = excluded."company",
+                    "location" = excluded."location",
+                    "date" = excluded."date",
+                    "source" = excluded."source",
+                    "payload_json" = excluded."payload_json",
+                    "scraped_at" = excluded."scraped_at",
+                    "status" = CASE
+                        WHEN scraper_results."status" IN ('evaluated', 'seen') THEN scraper_results."status"
+                        ELSE excluded."status"
+                    END
             ''', records)
+        clear_repost_cache()
     except Exception as e:
         print(f"[Database Error] Failed to save scraper results: {e}")
     finally:
@@ -489,7 +823,7 @@ def save_scraper_results(postings: list[dict], source_label: str = "") -> None:
 
 
 def load_scraper_results() -> list[dict]:
-    """Loads the persisted active scraper results from `scraper_results` with fallback to `seen_postings`."""
+    """Loads the persisted active scraper results from `scraper_results`."""
     conn = get_connection()
     try:
         conn.row_factory = sqlite3.Row
@@ -504,6 +838,8 @@ def load_scraper_results() -> list[dict]:
                     d = json.loads(payload_json)
                     if r["status"] and "status" not in d:
                         d["status"] = r["status"]
+                    if r["source"] and "source" not in d:
+                        d["source"] = r["source"]
                     results.append(d)
                     continue
                 except Exception:
@@ -515,24 +851,10 @@ def load_scraper_results() -> list[dict]:
                 "company": r["company"] or "Unknown Company",
                 "location": r["location"] or "",
                 "date": r["date"] or "",
+                "source": r["source"] or "LinkedIn",
                 "source_board": r["source"] or "LinkedIn",
-                "status": r["status"] or "seen"
+                "status": r["status"] or "new"
             })
-        if not results:
-            # Fallback to seen_postings so results survive initial migration and first login
-            cursor.execute('SELECT "id", "url", "title", "company", "location", "date", "source" FROM seen_postings ORDER BY rowid DESC')
-            seen_rows = cursor.fetchall()
-            for r in seen_rows:
-                results.append({
-                    "id": r["id"],
-                    "url": r["url"],
-                    "title": r["title"] or "(Untitled Role)",
-                    "company": r["company"] or "Unknown Company",
-                    "location": r["location"] or "",
-                    "date": r["date"] or "",
-                    "source_board": r["source"] or "LinkedIn",
-                    "status": "seen"
-                })
         return results
     except Exception as e:
         print(f"[Database Error] Failed to load scraper results: {e}")
@@ -555,12 +877,16 @@ def get_seen_postings_count() -> int:
         conn.close()
 
 
-def clear_scraper_results() -> None:
-    """Wipes the active scraper results queue from `scraper_results`."""
+def clear_scraper_results(source: str | None = None) -> None:
+    """Wipes the active scraper results queue from `scraper_results`, optionally filtered by source."""
     conn = get_connection()
     try:
         with conn:
-            conn.execute("DELETE FROM scraper_results")
+            if source:
+                conn.execute('DELETE FROM scraper_results WHERE "source" = ?', (source,))
+            else:
+                conn.execute("DELETE FROM scraper_results")
+        clear_repost_cache()
     except Exception as e:
         print(f"[Database Error] Failed to clear scraper results: {e}")
     finally:
@@ -642,32 +968,338 @@ def save_job_result(match_data):
             match_data.get("Source", "Manual")
         ))
         conn.commit()
+        clear_repost_cache()
     finally:
         conn.close()
     _secure_db_file_permissions()
 
-def update_job_field(url: str, field: str, value: str):
+def update_job_field(url: str, field: str, value: str, max_retries: int = 3) -> bool:
     if field not in ALLOWED_UPDATE_FIELDS:
         raise ValueError(f"Unauthorized field update attempt: '{field}'")
+    clean_url = (url or "").strip()
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            conn = get_connection()
+            try:
+                with conn:
+                    if field == "Application Status":
+                        now_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        if value == "Applied":
+                            cur = conn.execute(
+                                'UPDATE jobs SET "Application Status" = ?, "Status Updated" = ?, '
+                                '"Applied Date" = CASE WHEN "Applied Date" IS NULL OR "Applied Date" = \'\' THEN ? ELSE "Applied Date" END '
+                                'WHERE "URL" = ?',
+                                (value, now_ts, now_ts, clean_url)
+                            )
+                        else:
+                            cur = conn.execute(
+                                'UPDATE jobs SET "Application Status" = ?, "Status Updated" = ? WHERE "URL" = ?',
+                                (value, now_ts, clean_url)
+                            )
+                    else:
+                        cur = conn.execute(f'UPDATE jobs SET "{field}" = ? WHERE "URL" = ?', (value, clean_url))
+
+                    if cur.rowcount == 0 and clean_url:
+                        # Fallback for minor URL variations (e.g. trailing slash)
+                        alt_url = clean_url.rstrip("/") if clean_url.endswith("/") else clean_url + "/"
+                        if field == "Application Status":
+                            now_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            cur2 = conn.execute(
+                                'UPDATE jobs SET "Application Status" = ?, "Status Updated" = ? WHERE "URL" = ?',
+                                (value, now_ts, alt_url)
+                            )
+                            if cur2.rowcount > 0:
+                                return True
+                        else:
+                            cur2 = conn.execute(f'UPDATE jobs SET "{field}" = ? WHERE "URL" = ?', (value, alt_url))
+                            if cur2.rowcount > 0:
+                                return True
+                    return cur.rowcount > 0
+            finally:
+                conn.close()
+        except sqlite3.OperationalError as e:
+            last_err = e
+            if "locked" in str(e).lower() and attempt < max_retries - 1:
+                time.sleep(0.05 * (2 ** attempt))
+                continue
+            raise
+    if last_err:
+        raise last_err
+    return False
+
+
+def _parse_timestamp_to_dt(ts_str: str) -> datetime | None:
+    """Robustly parses timestamps across diverse ISO and human-readable formats."""
+    if not ts_str or not isinstance(ts_str, str):
+        return None
+    s = ts_str.strip()
+    formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d",
+        "%m/%d/%Y",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+    iso_match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if iso_match:
+        try:
+            return datetime(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+        except ValueError:
+            pass
+    return None
+
+
+_TITLE_STOPWORDS = frozenset({
+    "senior", "sr", "junior", "jr", "lead", "staff", "principal", "associate",
+    "ii", "iii", "iv", "level", "1", "2", "3", "remote", "hybrid", "onsite",
+    "full-time", "part-time", "contract", "intern", "internship", "the", "and", "or",
+    "of", "in", "at", "for", "to", "with"
+})
+
+
+def _extract_title_tokens(title: str) -> set[str]:
+    """Extracts distinctive role title tokens for repost matching."""
+    clean = re.sub(r"[^\w\s-]", " ", (title or "").lower())
+    words = set(re.findall(r"\b[a-z]{3,}\b", clean))
+    return words - _TITLE_STOPWORDS
+
+
+def detect_job_reposts(
+    company: str,
+    role: str,
+    current_url: str = "",
+    window_days: int = 90
+) -> list[dict]:
+    """
+    Scans evaluated jobs, scraper queue, and seen postings to identify historical
+    repostings or stale relistings of the same requisition from the same employer.
+    Distinguishes concurrent multiple-openings from temporal relistings (requiring span >= 7 days).
+    """
+    company_clean = (company or "").strip()
+    if not company_clean or company_clean.lower() in ("unknown", "unknown company", "confidential"):
+        return []
+
+    role_tokens = _extract_title_tokens(role)
+    if not role_tokens:
+        return []
+
+    now = datetime.now()
+    normalized_curr_url = normalize_job_url(current_url)
+    curr_li_id = extract_linkedin_job_id(current_url)
+
+    candidates = []
     conn = get_connection()
     try:
-        with conn:
-            if field == "Application Status":
-                now_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-                conn.execute(
-                    'UPDATE jobs SET "Application Status" = ?, "Status Updated" = ? WHERE "URL" = ?',
-                    (value, now_ts, url)
-                )
-            else:
-                conn.execute(f'UPDATE jobs SET "{field}" = ? WHERE "URL" = ?', (value, url))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        # 1. Search in jobs (evaluated postings)
+        cur.execute(
+            'SELECT "URL", "Position", "Company", "Timestamp", "Deadline", "Application Status" '
+            'FROM jobs WHERE LOWER("Company") = LOWER(?)',
+            (company_clean,)
+        )
+        for r in cur.fetchall():
+            row = dict(r)
+            candidates.append({
+                "source_table": "jobs",
+                "url": row.get("URL", ""),
+                "title": row.get("Position", ""),
+                "company": row.get("Company", ""),
+                "date_str": row.get("Timestamp", "") or row.get("Deadline", ""),
+                "status": row.get("Application Status", ""),
+            })
+
+        # 2. Search in scraper_results
+        cur.execute(
+            'SELECT "url", "title", "company", "date", "scraped_at" '
+            'FROM scraper_results WHERE LOWER("company") = LOWER(?)',
+            (company_clean,)
+        )
+        for r in cur.fetchall():
+            row = dict(r)
+            candidates.append({
+                "source_table": "scraper_results",
+                "url": row.get("url", ""),
+                "title": row.get("title", ""),
+                "company": row.get("company", ""),
+                "date_str": row.get("scraped_at", "") or row.get("date", ""),
+                "status": "Scraped",
+            })
+
+        # 3. Search in seen_postings
+        cur.execute(
+            'SELECT "url", "title", "company", "date", "seen_at" '
+            'FROM seen_postings WHERE LOWER("company") = LOWER(?)',
+            (company_clean,)
+        )
+        for r in cur.fetchall():
+            row = dict(r)
+            candidates.append({
+                "source_table": "seen_postings",
+                "url": row.get("url", ""),
+                "title": row.get("title", ""),
+                "company": row.get("company", ""),
+                "date_str": row.get("seen_at", "") or row.get("date", ""),
+                "status": "Discovered",
+            })
+    except Exception as e:
+        print(f"[Database Error] detect_job_reposts query failed: {e}")
+        return []
     finally:
         conn.close()
+
+    matched_events = []
+    seen_urls_in_batch = set()
+
+    for cand in candidates:
+        cand_url = cand.get("url", "")
+        norm_url = normalize_job_url(cand_url)
+        cand_li_id = extract_linkedin_job_id(cand_url)
+
+        is_same_item = (norm_url and norm_url == normalized_curr_url) or (curr_li_id and cand_li_id and curr_li_id == cand_li_id)
+        cand_tokens = _extract_title_tokens(cand.get("title", ""))
+        overlap = role_tokens.intersection(cand_tokens)
+
+        # Title similarity threshold: at least 50% overlap or >= 2 core tokens
+        if len(overlap) >= max(1, len(role_tokens) // 2) or len(overlap) >= 2:
+            dt = _parse_timestamp_to_dt(cand.get("date_str", ""))
+            if dt:
+                days_ago = (now - dt).days
+                if 0 <= days_ago <= window_days:
+                    dedup_key = (norm_url or cand_url, dt.strftime("%Y-%m-%d"))
+                    if dedup_key not in seen_urls_in_batch:
+                        seen_urls_in_batch.add(dedup_key)
+                        matched_events.append({
+                            "url": cand_url,
+                            "title": cand.get("title", ""),
+                            "company": cand.get("company", ""),
+                            "date": dt.strftime("%Y-%m-%d %H:%M"),
+                            "dt": dt,
+                            "days_ago": days_ago,
+                            "status": cand.get("status", ""),
+                            "is_current": is_same_item,
+                        })
+
+    if len(matched_events) < 2:
+        return []
+
+    matched_events.sort(key=lambda x: x["dt"])
+    earliest = matched_events[0]["dt"]
+    latest = matched_events[-1]["dt"]
+    days_span = (latest - earliest).days
+
+    # Temporal relisting verification requires spanning at least 7 days
+    if days_span < 7:
+        return []
+
+    reposts = []
+    for ev in matched_events:
+        reposts.append({
+            "url": ev["url"],
+            "title": ev["title"],
+            "company": ev["company"],
+            "date": ev["date"],
+            "days_ago": ev["days_ago"],
+            "status": ev["status"],
+            "days_span": days_span,
+            "is_ghost_risk": days_span >= 14,
+        })
+    return reposts
+
+
+def clear_repost_cache():
+    try:
+        check_repost_risk.cache_clear()
+    except Exception:
+        pass
+
+
+@lru_cache(maxsize=512)
+def check_repost_risk(company: str, role: str, current_url: str = "", window_days: int = 90) -> dict | None:
+    """
+    Returns a high-level summary dict if a role is identified as a repost / ghost risk,
+    or None if no repost patterns were detected.
+    """
+    reposts = detect_job_reposts(company, role, current_url, window_days)
+    if not reposts:
+        return None
+    days_span = reposts[0]["days_span"]
+    count = len(reposts)
+    is_ghost = days_span >= 14 or count >= 3
+    return {
+        "count": count,
+        "days_span": days_span,
+        "first_seen": reposts[0]["date"],
+        "last_seen": reposts[-1]["date"],
+        "is_ghost_risk": is_ghost,
+        "badge_text": f"👻 Relisted {count}x over {days_span}d" if is_ghost else f"🔄 Relisted {count}x ({days_span}d span)",
+        "reposts": reposts,
+    }
+
+
+def get_pipeline_turnaround_metrics() -> dict:
+    """
+    Computes turnaround latencies and employer responsiveness metrics across evaluated jobs:
+    - Average days to interview invite
+    - Average days to rejection
+    - Fast responders (< 7 days)
+    - Stale / Ghosted applications (> 14 days with no response)
+    """
+    all_jobs = load_all_jobs(summary_only=True)
+    interview_latencies = []
+    rejection_latencies = []
+    ghosted_count = 0
+    now = datetime.now()
+
+    for j in all_jobs:
+        status = j.get("Application Status", "")
+        applied_str = j.get("Applied Date", "")
+        status_up_str = j.get("Status Updated", "") or j.get("Timestamp", "")
+
+        app_dt = _parse_timestamp_to_dt(applied_str)
+        if not app_dt and status in ("Applied", "Interviewing", "Offer", "Rejected"):
+            app_dt = _parse_timestamp_to_dt(j.get("Timestamp", ""))
+
+        if app_dt:
+            up_dt = _parse_timestamp_to_dt(status_up_str) or now
+            delta_days = max(0, (up_dt - app_dt).days)
+
+            if status == "Interviewing":
+                interview_latencies.append(delta_days)
+            elif status == "Rejected":
+                rejection_latencies.append(delta_days)
+            elif status == "Applied":
+                wait_days = (now - app_dt).days
+                if wait_days >= 14:
+                    ghosted_count += 1
+
+    avg_interview = sum(interview_latencies) / len(interview_latencies) if interview_latencies else 0.0
+    avg_rejection = sum(rejection_latencies) / len(rejection_latencies) if rejection_latencies else 0.0
+
+    return {
+        "avg_interview_days": round(avg_interview, 1),
+        "avg_rejection_days": round(avg_rejection, 1),
+        "total_interviewed": len(interview_latencies),
+        "total_rejected": len(rejection_latencies),
+        "ghosted_14d_count": ghosted_count,
+    }
 
 def clear_all_history():
     conn = get_connection()
     try:
         with conn:
             conn.execute("DELETE FROM jobs")
+        clear_repost_cache()
     finally:
         conn.close()
 

@@ -119,59 +119,85 @@ Don't worry about keeping it under one page! Skippy will pick and choose the bes
 
 Once you finish onboarding, you'll see all of Skippy's tools in the left sidebar:
 
-### 1. 🔍 Scraper
+### 1. 🔍 Job Search
 Your command center for sourcing and feeding job descriptions to the AI:
-- **🔎 Native Job Board Search (No Login Required):** Search live postings on **LinkedIn** (public guest endpoint) and **FreeHire** (global tech aggregator) by role, location, workplace type (Remote, Hybrid, On-site), and recency.
-- **📝 Paste a Job Description:** Copy and paste raw job posting text from any job board. Protected automatically by **Posting Guard** against prompt-injections, invisible Unicode tampering, and hidden text blocks.
-- **🔗 Multi-URL Search:** Paste direct job links from supported sites (LinkedIn, Built In) to evaluate them back-to-back.
-- **🧭 Universal Search:** Quick-fill category presets for Built In (Cybersecurity, Software Engineering, Cloud & DevOps).
+- **🔎 Native Job Board Search (No Login Required):** Search live postings on **LinkedIn** (public guest endpoint), **Direct Company ATS Boards** (**Greenhouse**, **Ashby**, **Lever** — zero authentication), and **FreeHire** by role, location, workplace type (Remote, Hybrid, On-site), and recency.
+- **📝 Paste a Job Description:** Copy and paste raw job posting text from any job board. Protected automatically by **Job Text Safety Shield** against prompt-injections, invisible Unicode tampering, and hidden text blocks.
+- **🔗 Multi-URL Search:** Paste direct job links from supported sites (LinkedIn, Built In, corporate career portals) to evaluate them back-to-back.
+- **🧭 Universal Search:** Quick-fill category presets across Healthcare/Biotech, Operations/HR, Data/Analytics, Cybersecurity, Software Engineering, and Cloud.
 
-### 2. 📋 Scraper Results
+### 2. 📋 Search Results
 A dedicated curation and review hub for discovered postings:
 - **Interactive Results Table:** Filter discovered jobs by company, role, workplace type, and status (`new`, `seen`, `evaluated`).
+- **👻 Ghost Job & Repost Signals:** Live indicator flags requisitions repeatedly relisted over 14+ days.
 - **Batch Evaluation:** Select multiple jobs or evaluate the top new postings with 1 click.
 - **Mark as Seen:** Automatically or manually mark postings as seen so subsequent searches never re-evaluate duplicates.
 
-### 3. 🔗 LinkedIn Evaluator (Fallback Queue)
+### 3. 📥 LinkedIn Inbox
 Browse LinkedIn with Skippy's browser extension while logged into your account:
 - Right-click any posting on LinkedIn and choose **⚡ Send Listing to Skippy**.
 - Captured postings line up in your queue ready for bulk AI evaluation with 1 click.
 
-### 4. 📁 History
+### 4. 📁 Job History
 Your persistent job search archive stored locally in `skippy.db`:
 - **Daily Grouped Postings:** Postings are neatly organized by calendar day (*Today*, *Yesterday*, or earlier) for fast review.
-- **Multi-Dimensional Rubric:** View detailed breakdowns across Technical Skills (30%), Experience Match (25%), Behavioral Fit (15%), and Career Alignment (30%).
+- **Multi-Dimensional Rubric:** View detailed breakdowns across Hard Skills / Tech (30%), Experience Match (25%), Behavioral Fit (15%), and Career Alignment (30%).
+- **Ghost Job & Repost Detector:** Automatically cross-references postings across 30/60/90 days to warn when a company has repeatedly relisted stale or churned requisitions.
+- **Application Latency Tracking:** Automatically tracks your application submission timeline and measures turnaround latency to interview or rejection.
 - **Generate Tailored Documents:** Click into any job to produce:
-  - 📝 **Tailored ATS Resume:** Re-targets your bullet points to match the employer's specific tech stack and requirements.
-  - ✉️ **Custom Cover Letter:** An authentic, professional narrative highlighting your genuine accomplishments.
-  - 🎤 **STAR Interview Prep:** Custom behavioral and technical practice questions using the proven Situation, Task, Action, Result framework.
-  - 📋 **Application Q&A Pack:** Ready-to-copy answers to tricky portal screening questions.
+  - 📝 **Tailored ATS Resume:** Re-targets your bullet points to match the employer's specific domain requirements across medicine, law, logistics, HR, finance, or tech.
+  - ✉️ **Custom Cover Letter:** An authentic, grounded 3-paragraph narrative highlighting verified achievements.
+  - 🎤 **STAR Interview Prep:** Custom domain and behavioral questions using the proven STAR framework with ready-made honest gap bridges.
+  - 📋 **Application Q&A Pack:** Programmatically character-counted form-field responses (`<=140` and `<=280` characters) ready for online portals.
   - 📬 **Follow-Up Note:** Professional outreach messages to recruiters and hiring managers.
+  - 🎯 **Outreach & Networking Notes:** Persona-tuned LinkedIn connection notes (strictly capped at `<= 300 characters` for Hiring Managers, Recruiters, and Peers) plus high-converting direct cold emails.
+  - 🏢 **Deep Company Briefing Dossier:** 6-axis pre-interview intelligence covering business models, operating platforms, recent signals, operational challenges, culture, and winning interview talking points.
 - **🛡️ Drafter–Reviewer Fact Audit:** Run a secondary verification pass that audits generated documents against your real resume to guarantee zero factual hallucinations.
 
-### 5. 🖼️ Document Gallery
+### 5. 🖼️ Saved Documents
 A dedicated centralized hub to manage all generated career documents:
 - **Filter & Search:** Filter by job title, company name, document type, or alignment score.
+- **Browse All Materials:** Access Tailored Resumes, Cover Letters, Application Answers, Interview Prep, Follow-Up Notes, Networking Messages, and Company Research in one place.
 - **In-App Markdown Editor:** Live edit and fine-tune your materials with real-time saving to the database.
 - **Dual Format Downloads:** Export ready-to-send documents as stylized Word files (`.docx`) or pixel-perfect, ATS-compliant PDFs (`.pdf`).
 
-### 6. 🌊 Application Funnel (Sankey)
+### 6. 🌊 Application Tracker
 A dedicated pipeline conversion visualizer:
 - **Interactive Sankey Diagram:** Visualizes your entire pipeline from initial discovery and evaluation to screening, active interviews, and offers received. Nodes can be dragged to customize layout.
 - **Conversion KPI Badges:** Tracks Active in Pipeline count, Application Rate, Screen/Interview Rate, and Offer Conversion Rate.
+- **Turnaround & Rejection Latency:** Displays average days to interview response, average days to rejection, and highlights ghosted applications (>14d without response).
 - **Stale Threshold Slider:** Set customizable staleness timers (7–30 days) to automatically flag stalled applications in *Ghosted / Stale*.
-- **Stage Explorer & Status Manager:** Inspect roles in any stage and advance applications with 1 click (*"👉 Heard back: Interview ➔"*).
+- **Stage Explorer & Status Manager:** Inspect roles in any stage and advance applications with 1 click (*"Heard back: Interview ➔"*).
 
-### 7. 📊 Metrics
-Comprehensive market intelligence and upskill guidance:
-- **Market & Skill Intelligence:** Aggregates top matching skills across postings, highlights the most common missing skill gaps, and clusters recurring red flag themes (such as on-call rotations, security clearance requirements, or hybrid relocation gates).
-- **🎓 Actionable Upskill & Learning Plan Generator:** Weights skill gaps across near-fit roles (Score ≥ 45) and generates a personalized, step-by-step study roadmap complete with bridge portfolio projects, 100% free study resources, and downloadable `.docx` study plans.
+### 7. 📊 Skills & Insights
+Comprehensive market intelligence and upskill guidance across any profession:
+- **Market & Skill Intelligence:** Aggregates top matching skills across postings, highlights the most common missing skill gaps, and clusters recurring red flag themes (clinical platforms, ERP systems, licensing gates, clearance demands, or relocation).
+- **🎓 Personalized Learning Plan Generator:** Weights skill gaps across near-fit roles (Score ≥ 45) and generates a personalized study roadmap complete with hands-on bridge projects, clinical/legal simulations, 100% free study resources, and downloadable `.docx` study plans.
 
-### 8. ⚙️ Resume and Prompts
+### 8. ⚙️ Resumes & AI Settings
 - **Multi-Resume Vault:** Upload, store, and manage multiple resume profiles (`.docx`, `.pdf`, `.md`, `.txt`). Use the live split-view ATS preview to inspect formatting in real time.
+- **🛡️ ATS Formatting & Compatibility Linter:** Programmatically audits resumes against automated ATS parsing rules, section headers, character anomalies (like garbled Unicode dashes), and bullet length—with a 1-click **Auto-Fix** button.
 - **Prompt Preset Manager:** Customize and switch evaluation system instructions and prompt presets.
 
-### 9. 👋 About
+### 9. 🧭 Career Profile & Direction
+Skippy's intelligent, universal career orientation hub:
+- **7-Question Operational Compass:** Replaces hardcoded industry tags with an engaging assessment of your real-world problem-solving instincts, shift environments, trade/field tools, and crisis troubleshooting reflexes.
+- **14 Universal Career Tracks:** Purpose-built for **First Responders** (Fire, EMS/Paramedic, NIMS/ICS), **Military & Defense Operations / Veteran Transitions** (MOS/AFSC translation, Security Clearances, DD-214), **Public Sector & Civil Service** (FAR/DFARS, Civil Service Exams), **Skilled Trades** (Electricians, HVAC, Plumbing, Welding, EPA 608, Journeyman), **Manufacturing & Precision Machining** (CNC, Mastercam, ISO 9001), **Transportation & Fleet Logistics** (CDL-A, ELD, DOT, HazMat), **Healthcare & Clinical Services** (RN, BLS/ACLS, EMR), **Hospitality & Culinary**, **Protective Services**, and all digital, corporate, and tech professions.
+- **Hybrid Cross-Domain Industry Profiles:** Automatically creates high-impact cross-industry profiles (e.g., *Industrial Automation & Mechatronics*, *Defense Logistics Director*, *Flight Paramedic*, *FAR/DFARS Contracting Officer*).
+- **Interactive Plotly Radar Visualizer:** Inspect your multidimensional alignment distribution in real time.
+- **Full-System Adaptation:** Automatically tunes your evaluation rubric (`custom_prompt.template.txt`), Scraper search presets, and document drafters to your exact industry and target role.
+- **Manual Weight Sliders & 1-Click Auto-Detect:** Fine-tune your alignment percentages directly with sliders or auto-detect your profile from your master resume in 1 click.
+
+### 10. 🌐 100% Industry & Trade Agnostic
+Skippy is universally engineered for candidates across the entire workforce:
+- **First Responders & Defense:** Structural/wildland fire suppression, field trauma stabilization, tactical operations, defense systems, security clearances (Secret/TS-SCI).
+- **Blue-Collar & Trades:** Hands-on wiring, refrigerant handling, CNC machining, commercial truck driving (CDL-A), and warehouse distribution.
+- **Public Sector & Civil Governance:** Statutory compliance, municipal administration, public policy, and government acquisition.
+- **Clinical & Applied Care:** Bedside nursing, emergency triage, HIPAA privacy, and clinical protocols.
+- **Corporate, Legal & Tech:** Software engineering, threat defense, corporate law, people operations, and quantitative finance.
+
+### 11. 🦘 About Skippy
+Application documentation, security overview, and quick-reference guides.
 Application documentation, security overview, and quick-reference guides.
 
 ---

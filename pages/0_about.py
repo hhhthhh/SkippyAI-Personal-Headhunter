@@ -1,25 +1,24 @@
 import streamlit as st
 from utils import setup_sidebar, enforce_onboarding
 
-st.title("🦘 Skippy: AI Job Search & Career CRM")
+st.title("🦘 About Skippy")
 st.markdown("---")
-st.markdown("### Architecture & Design")
+st.markdown("### What is Skippy?")
 st.write(
-    "Skippy is a 100% free, local-first Multi-Page AI Job Search & Career CRM. "
-    "It combines unauthenticated job board search APIs, deterministic prompt-injection defense, "
-    "multi-dimensional candidate scoring, a two-pass Drafter–Reviewer grounding engine, and "
-    "automated market skill-gap intelligence."
+    "Skippy is a 100% free, private assistant that helps you find jobs, see if you're a real match, "
+    "and create tailored resumes and interview prep—running right on your computer without ever "
+    "sending your personal data to the cloud."
 )
 
-st.markdown("### Technical Highlights")
+st.markdown("### Key Highlights")
 st.markdown(
-    "- **Core Stack:** Python, Streamlit, SQLite (WAL concurrency), Pydantic, python-docx\n"
-    "- **Multi-Source Job Discovery:** Native LinkedIn Public Guest Search, FreeHire Global Tech API (with ghost-job/repost detection), Built In (`builtin.com`), and lazy Playwright SPA fallback\n"
-    "- **AI Backend (Bring Your Own Key or Free Local):** Google Gemini (free tier supported), OpenAI, Anthropic, xAI Grok, or Local Ollama\n"
-    "- **4-Pillar Weighted Scoring & Gates:** Deterministic `30% Technical + 25% Experience + 15% Behavioral + 30% Career Alignment` rubric with explicit Eligibility & Location gates\n"
-    "- **2-Step Drafter–Reviewer & ATS Audit:** Cross-checks tailored resumes and cover letters against your Master Resume to eliminate hallucinations, normalize ASCII dates, and verify ATS keyword coverage\n"
-    "- **Full Application Suite:** Tailored Resumes, Cover Letters, Character-Counted Application Portal Q&A Packs, Stage-Aware Interview Prep (with Honest Gap Bridges), Follow-Up Notes, and Personalized Upskill Roadmaps\n"
-    "- **Security (`posting_guard.py`):** Deterministic HTML/CSS hidden-element stripping, zero-width & bidirectional Unicode sanitization, homoglyph detection, SSRF per-hop redirect validation, and XML-delimited prompt boundaries"
+    "- **100% Private & Local:** Runs on your machine. Your resumes, notes, and searches stay safe on your hard drive.\n"
+    "- **Easy Job Discovery:** Search live jobs across LinkedIn, top company hiring sites (Greenhouse, Ashby, Lever), or tech boards without needing an account or login.\n"
+    "- **Choose Your AI Assistant:** Works with Google Gemini (free tier), ChatGPT, Claude, Grok, or run 100% offline with Ollama.\n"
+    "- **Honest Match Scoring:** Scores jobs from 0 to 100 across skills, experience, team fit, and career goals, catching dealbreakers (like clearances or relocation) upfront.\n"
+    "- **Fact-Checked Resumes:** Automatically writes customized resumes and cover letters, then double-checks them against your real background so nothing is made up.\n"
+    "- **Complete Job Search Toolkit:** Prepares tailored resumes, cover letters, short answers for job applications, interview practice questions, follow-up messages, and personalized study guides.\n"
+    "- **Built-in Safety Shield:** Automatically blocks hidden text, invisible characters, and malicious code from untrusted job listings before sending them to the AI."
 )
 
 st.markdown("---")

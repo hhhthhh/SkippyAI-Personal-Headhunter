@@ -19,6 +19,10 @@
 # User's master resume, multi-resume vault, and generated documents
 resume.md
 resumes.json
+profile_alignment.json
+custom_prompt.txt
+custom_user_prompt.txt
+app_settings.json
 *.docx
 *.pdf
 
@@ -57,7 +61,6 @@ __pycache__/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
-tests/
 scratch/
 
 # ------------------------------------------------------------------------------
