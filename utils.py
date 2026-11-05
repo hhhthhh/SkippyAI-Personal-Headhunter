@@ -71,7 +71,7 @@ def render_help_content():
     st.markdown(
         "- **🔎 Native Job Board Search (Free, No Key Required):** Search **LinkedIn** (via public guest endpoints) and **FreeHire** (global tech job aggregator) directly inside Skippy by role, location, workplace mode, and recency.\n"
         "- **🏢 Built In & Direct URLs:** **Built In** (`builtin.com`) and direct **LinkedIn** job URLs (`linkedin.com/jobs/view/...`) are supported for automated scraping in Multi-URL and Universal Search.\n"
-        "- **🧩 LinkedIn Evaluator (Fallback):** Tucked under **Scraper** in the sidebar. Use Skippy's browser extension as a fallback if LinkedIn rate-limits guest requests or when you want to send postings with 1 click while browsing logged-in.\n"
+        "- **🧩 LinkedIn Extension Inbox:** Easily accessible via the **🔗 LinkedIn Extension Inbox** button and navigation item in the sidebar. Use Skippy's browser extension to capture postings with 1 click while browsing logged-in.\n"
         "- **🛡️ Posting Guard Security:** All scraped and pasted postings are deterministically sanitized to remove hidden HTML prompt-injection blocks and invisible Unicode tampering before reaching your AI provider."
     )
 
@@ -544,11 +544,17 @@ def check_and_handle_pipeline_completion() -> bool:
     if status.get("has_unnotified_completion"):
         batch = pipeline_manager.consume_completed_batch()
         if batch:
+            was_cancelled = batch.get("was_cancelled", False)
             if batch.get("jobs"):
                 st.session_state["completion_batch"] = batch
                 count = len(batch["jobs"])
                 src = batch.get("source", "Pipeline")
-                st.toast(f"🎉 Evaluation Complete! {count} job{'s' if count != 1 else ''} evaluated from {src}.", icon="✅")
+                if was_cancelled:
+                    st.toast(f"⏹️ {src} Review Stopped: {count} job{'s' if count != 1 else ''} evaluated and saved.", icon="⏹️")
+                else:
+                    st.toast(f"🎉 Evaluation Complete! {count} job{'s' if count != 1 else ''} evaluated from {src}.", icon="✅")
+            elif was_cancelled:
+                st.toast("⏹️ Review Stopped: Evaluation pipeline halted.", icon="⏹️")
             elif batch.get("failed", 0) > 0:
                 err_msg = f": {batch['last_error']}" if batch.get("last_error") else ""
                 st.toast(f"⚠️ Evaluation finished with {batch['failed']} failed job(s){err_msg}.", icon="⚠️")
@@ -564,28 +570,37 @@ def render_global_pipeline_status():
     # 1. If pipeline is running, render a live card in the sidebar
     if status.get("is_running"):
         with st.sidebar.container(border=True):
-            st.markdown("⚡ **Reviewing Jobs...**")
-            total = max(status.get("total", 1), 1)
-            completed = status.get("completed", 0)
-            prog = min(completed / total, 1.0)
+            if status.get("is_stopping"):
+                st.markdown("🛑 **Stopping Review...**")
+                st.caption("Halting pipeline gracefully...")
+                st.button("🛑 Stopping...", key="btn_cancel_global_pipeline", width="stretch", disabled=True)
+            else:
+                st.markdown("⚡ **Reviewing Jobs...**")
+                total = max(status.get("total", 1), 1)
+                completed = status.get("completed", 0)
+                prog = min(completed / total, 1.0)
 
-            cur = status.get("current_job", "Working...")
-            if len(cur) > 35:
-                cur = cur[:32] + "..."
-            st.progress(prog, text=f"{completed}/{status.get('total', 1)} reviewed")
-            st.caption(f"📍 `{cur}`")
-            st.caption("💡 *You can freely browse other pages while this runs.*")
-            if st.button("🛑 Stop Review", key="btn_cancel_global_pipeline", width="stretch"):
-                pipeline_manager.cancel()
-                st.rerun()
+                cur = status.get("current_job", "Working...")
+                if len(cur) > 35:
+                    cur = cur[:32] + "..."
+                st.progress(prog, text=f"{completed}/{status.get('total', 1)} reviewed")
+                st.caption(f"📍 `{cur}`")
+                st.caption("💡 *You can freely browse other pages while this runs.*")
+                if st.button("🛑 Stop Review", key="btn_cancel_global_pipeline", width="stretch"):
+                    pipeline_manager.cancel()
+                    st.rerun()
 
     # 3. If a completion batch exists, show a quick action card in the sidebar
     elif "completion_batch" in st.session_state and st.session_state["completion_batch"].get("jobs"):
         batch = st.session_state["completion_batch"]
         count = len(batch.get("jobs", []))
         src = batch.get("source", "Pipeline")
+        was_cancelled = batch.get("was_cancelled", False)
         with st.sidebar.container(border=True):
-            st.success(f"🎉 **{count}** jobs ready ({src})!")
+            if was_cancelled:
+                st.info(f"⏹️ **{count}** jobs saved before review was stopped ({src}).")
+            else:
+                st.success(f"🎉 **{count}** jobs ready ({src})!")
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("📂 Job History", key="sb_view_hist", width="stretch"):
@@ -768,92 +783,42 @@ def setup_sidebar():
         """
         <style>
         [data-testid="stSidebarNav"] span {
-            font-size: 1.15rem !important;
+            font-size: 1.05rem !important;
             font-weight: 500 !important;
         }
-        /* Chevron indicator on Scraper showing it has a hover submenu */
-        [data-testid="stSidebarNav"] ul > li:nth-child(1) a::after,
+        /* Submenu indicator on Job Search */
         [data-testid="stSidebarNav"] ul > li:has(a[href*="1_scraper"]) a::after {
-            content: "▸";
+            content: "▾";
             margin-left: auto;
             font-size: 0.85rem;
-            opacity: 0.55;
-            transition: transform 0.2s ease, opacity 0.2s ease;
+            opacity: 0.6;
         }
-        [data-testid="stSidebarNav"] ul:has(> li:nth-child(2) [aria-current="page"]) > li:nth-child(1) a::after,
-        [data-testid="stSidebarNav"] ul > li:nth-child(1):hover a::after,
-        [data-testid="stSidebarNav"] ul:has(> li:nth-child(2):hover) > li:nth-child(1) a::after,
-        [data-testid="stSidebarNav"] ul:has(> li a[href*="5_linkedin"][aria-current="page"]) > li:has(a[href*="1_scraper"]) a::after,
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="1_scraper"]):hover a::after,
-        [data-testid="stSidebarNav"] ul:has(> li:has(a[href*="5_linkedin"]):hover) > li:has(a[href*="1_scraper"]) a::after,
-        [data-testid="stSidebarNav"] ul:has(> li:has(a[href*="linkedin"]):hover) > li:nth-child(1) a::after {
-            content: "▾";
-            opacity: 0.9;
-        }
-        /* Nested tree submenu styling for LinkedIn Evaluator (Fallback) under Scraper */
+        /* Nested sub-button styling for Extension Inbox directly under Job Search */
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]),
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]),
-        [data-testid="stSidebarNav"] ul > li:nth-child(2) {
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]) {
             position: relative;
-            margin: 0 !important;
-            padding-left: 1.85rem !important;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-            max-height: 0;
-            opacity: 0;
-            overflow: hidden;
-            /* 0.35s closing grace delay so moving the cursor from Scraper to the submenu never drops hover */
-            transition:
-                max-height 0.22s ease 0.35s,
-                opacity 0.18s ease 0.35s,
-                padding-top 0.22s ease 0.35s,
-                padding-bottom 0.22s ease 0.35s;
+            padding-left: 1.65rem !important;
+            margin-top: -3px !important;
         }
-        /* L-shaped tree branch connector (|__) drawn inside the left padding area */
+        /* L-shaped tree branch connector (└──) */
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"])::before,
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"])::before,
-        [data-testid="stSidebarNav"] ul > li:nth-child(2)::before {
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"])::before {
             content: "";
             position: absolute;
             left: 1.15rem;
             top: 0;
-            height: 55%;
-            width: 0.5rem;
-            border-left: 1.5px solid rgba(150, 150, 150, 0.5);
-            border-bottom: 1.5px solid rgba(150, 150, 150, 0.5);
-            border-bottom-left-radius: 3px;
+            height: 50%;
+            width: 0.65rem;
+            border-left: 2px solid rgba(150, 150, 150, 0.45);
+            border-bottom: 2px solid rgba(150, 150, 150, 0.45);
+            border-bottom-left-radius: 4px;
             pointer-events: none;
         }
         [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]) span,
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]) span,
-        [data-testid="stSidebarNav"] ul > li:nth-child(2) span {
-            font-size: 0.92rem !important;
+        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]) span {
+            font-size: 0.95rem !important;
             font-weight: 400 !important;
-        }
-        /* Instant expand on hover of Scraper or when inside submenu */
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="1_scraper"]):hover + li:has(a[href*="5_linkedin"]),
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]):hover,
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]):active,
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"]):focus-within,
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="5_linkedin"] [aria-current="page"]),
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]):hover,
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]):active,
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"]):focus-within,
-        [data-testid="stSidebarNav"] ul > li:has(a[href*="linkedin"] [aria-current="page"]),
-        [data-testid="stSidebarNav"] ul > li:nth-child(1):hover + li:nth-child(2),
-        [data-testid="stSidebarNav"] ul > li:nth-child(2):hover,
-        [data-testid="stSidebarNav"] ul > li:nth-child(2):active,
-        [data-testid="stSidebarNav"] ul > li:nth-child(2):focus-within,
-        [data-testid="stSidebarNav"] ul > li:nth-child(2):has([aria-current="page"]) {
-            max-height: 3.5rem;
             opacity: 0.95;
-            padding-top: 0.2rem !important;
-            padding-bottom: 0.25rem !important;
-            transition:
-                max-height 0.18s ease 0s,
-                opacity 0.14s ease 0s,
-                padding-top 0.18s ease 0s,
-                padding-bottom 0.18s ease 0s;
         }
         </style>
         """,
@@ -1215,16 +1180,20 @@ def render_completion_card(batch_jobs: list[dict], source_label: str = "Scraper"
         return
 
     from datetime import datetime
+    was_cancelled = bool(st.session_state.get("completion_batch", {}).get("was_cancelled", False))
 
     with st.container(border=True):
-        st.subheader("🎉 Job Reviews Finished!")
+        if was_cancelled:
+            st.subheader("⏹️ Job Review Stopped")
+        else:
+            st.subheader("🎉 Job Reviews Finished!")
         total = len(batch_jobs)
         strong = sum(1 for j in batch_jobs if j.get("Score", 0) >= 75 and j.get("Eligible", True))
         reach = sum(1 for j in batch_jobs if j.get("Score", 0) < 75 and j.get("Eligible", True))
         disqualified = sum(1 for j in batch_jobs if not j.get("Eligible", True))
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Jobs Reviewed", total)
+        m1.metric("Jobs Evaluated Before Stop" if was_cancelled else "Jobs Reviewed", total)
         m2.metric("Strong Matches", strong)
         m3.metric("Moderate Matches", reach)
         m4.metric("Dealbreakers", disqualified)

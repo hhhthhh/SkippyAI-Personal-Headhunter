@@ -79,16 +79,21 @@ def render_auto_inbox():
     status = pipeline_manager.get_status()
     if status.get("is_running") and status.get("source") == "LinkedIn":
         with st.container(border=True):
-            st.subheader("⚙️ Reviewing Jobs in the Background...")
-            total = max(status.get("total", 1), 1)
-            completed = status.get("completed", 0)
-            prog = min(completed / total, 1.0)
-            cur = status.get("current_job", "Working...")
-            st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
-            st.info("💡 **You can freely explore other pages:** Reviewing continues in the background while you browse.")
-            if st.button("🛑 Stop Review", key="stop_linkedin_pipeline_main"):
-                pipeline_manager.cancel()
-                st.rerun()
+            if status.get("is_stopping"):
+                st.subheader("🛑 Stopping Review...")
+                st.info("Halting LinkedIn inbox evaluation gracefully...")
+                st.button("🛑 Stopping...", key="stop_linkedin_pipeline_main", disabled=True)
+            else:
+                st.subheader("⚙️ Reviewing Jobs in the Background...")
+                total = max(status.get("total", 1), 1)
+                completed = status.get("completed", 0)
+                prog = min(completed / total, 1.0)
+                cur = status.get("current_job", "Working...")
+                st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
+                st.info("💡 **You can freely explore other pages:** Reviewing continues in the background while you browse.")
+                if st.button("🛑 Stop Review", key="stop_linkedin_pipeline_main"):
+                    pipeline_manager.cancel()
+                    st.rerun()
         st.markdown("---")
 
     pending_jobs = load_inbox_jobs()

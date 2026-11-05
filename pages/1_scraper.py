@@ -82,18 +82,23 @@ def render_active_scraper_pipeline():
     status = pipeline_manager.get_status()
     if status.get("is_running") and status.get("source") == "Scraper":
         with st.container(border=True):
-            st.subheader("⚙️ Reviewing Jobs in the Background...")
-            total = max(status.get("total", 1), 1)
-            completed = status.get("completed", 0)
-            prog = min(completed / total, 1.0)
-            cur = status.get("current_job", "Initializing...")
-            if len(cur) > 60:
-                cur = cur[:57] + "..."
-            st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
-            st.info("💡 **You can freely explore other pages:** Reviewing continues in the background, and you'll be notified as soon as it's finished!")
-            if st.button("🛑 Stop Review", key="stop_scraper_pipeline_main"):
-                pipeline_manager.cancel()
-                st.rerun()
+            if status.get("is_stopping"):
+                st.subheader("🛑 Stopping Review...")
+                st.info("Halting background review pipeline gracefully...")
+                st.button("🛑 Stopping...", key="stop_scraper_pipeline_main", disabled=True)
+            else:
+                st.subheader("⚙️ Reviewing Jobs in the Background...")
+                total = max(status.get("total", 1), 1)
+                completed = status.get("completed", 0)
+                prog = min(completed / total, 1.0)
+                cur = status.get("current_job", "Initializing...")
+                if len(cur) > 60:
+                    cur = cur[:57] + "..."
+                st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
+                st.info("💡 **You can freely explore other pages:** Reviewing continues in the background, and you'll be notified as soon as it's finished!")
+                if st.button("🛑 Stop Review", key="stop_scraper_pipeline_main"):
+                    pipeline_manager.cancel()
+                    st.rerun()
 
 
 render_active_scraper_pipeline()
@@ -551,7 +556,7 @@ elif selected_mode == "🌐 Paste Multiple Links":
                 if not new_urls:
                     st.warning("All provided URLs have already been evaluated. Check your History tab!")
                 else:
-                    process_evaluations(new_urls[:max_jobs])
+                    process_evaluations(new_urls)
 
 elif selected_mode == "🧭 Search by Category":
     st.subheader("🧭 Search by Category")

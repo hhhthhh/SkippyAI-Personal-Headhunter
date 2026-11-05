@@ -13,11 +13,19 @@ st.set_page_config(page_title="Skippy - AI Job CRM", layout="wide")
 # 2. Interactive Hover & Halo Effects (Preserving 100% native theme/colors)
 inject_interactive_hover_halo_effects()
 
+def get_extension_inbox_title() -> str:
+    try:
+        from webhook import load_inbox_jobs
+        count = len(load_inbox_jobs())
+        return f"Extension Inbox ({count})" if count > 0 else "Extension Inbox"
+    except Exception:
+        return "Extension Inbox"
+
 # 3. Router Navigation Definition
 pages = [
     st.Page("pages/1_scraper.py", title="Job Search", icon="🔍"),
+    st.Page("pages/5_linkedin.py", title=get_extension_inbox_title(), icon="🔗"),
     st.Page("pages/7_scraper_results.py", title="Search Results", icon="📋"),
-    st.Page("pages/5_linkedin.py", title="LinkedIn Inbox", icon="🔗"),
     st.Page("pages/2_history.py", title="Job History", icon="📁"),
     st.Page("pages/6_gallery.py", title="Saved Documents", icon="🖼️"),
     st.Page("pages/8_pipeline_funnel.py", title="Application Tracker", icon="🌊"),
