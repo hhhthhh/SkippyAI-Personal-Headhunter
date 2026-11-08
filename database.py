@@ -1132,7 +1132,7 @@ def detect_job_reposts(
                 "url": row.get("url", ""),
                 "title": row.get("title", ""),
                 "company": row.get("company", ""),
-                "date_str": row.get("scraped_at", "") or row.get("date", ""),
+                "date_str": row.get("date", "") or row.get("scraped_at", ""),
                 "status": "Scraped",
             })
 
@@ -1149,7 +1149,7 @@ def detect_job_reposts(
                 "url": row.get("url", ""),
                 "title": row.get("title", ""),
                 "company": row.get("company", ""),
-                "date_str": row.get("seen_at", "") or row.get("date", ""),
+                "date_str": row.get("date", "") or row.get("seen_at", ""),
                 "status": "Discovered",
             })
     except Exception as e:
@@ -1158,8 +1158,7 @@ def detect_job_reposts(
     finally:
         conn.close()
 
-    matched_events = []
-    seen_urls_in_batch = set()
+    by_posting_key: dict[str, dict] = {}
 
     for cand in candidates:
         cand_url = cand.get("url", "")
@@ -1176,20 +1175,35 @@ def detect_job_reposts(
             if dt:
                 days_ago = (now - dt).days
                 if 0 <= days_ago <= window_days:
-                    dedup_key = (norm_url or cand_url, dt.strftime("%Y-%m-%d"))
-                    if dedup_key not in seen_urls_in_batch:
-                        seen_urls_in_batch.add(dedup_key)
-                        matched_events.append({
-                            "url": cand_url,
-                            "title": cand.get("title", ""),
-                            "company": cand.get("company", ""),
-                            "date": dt.strftime("%Y-%m-%d %H:%M"),
-                            "dt": dt,
-                            "days_ago": days_ago,
-                            "status": cand.get("status", ""),
-                            "is_current": is_same_item,
-                        })
+                    posting_key = cand_li_id or norm_url or cand_url or f"{cand.get('title', '')}_{dt.strftime('%Y-%m-%d')}"
+                    event_obj = {
+                        "url": cand_url,
+                        "title": cand.get("title", ""),
+                        "company": cand.get("company", ""),
+                        "date": dt.strftime("%Y-%m-%d %H:%M"),
+                        "dt": dt,
+                        "days_ago": days_ago,
+                        "status": cand.get("status", ""),
+                        "is_current": is_same_item,
+                        "source_table": cand.get("source_table", ""),
+                    }
+                    existing = by_posting_key.get(posting_key)
+                    if existing is None:
+                        by_posting_key[posting_key] = event_obj
+                    else:
+                        # Same posting across tables (e.g. scraped earlier, evaluated later):
+                        # preserve the earliest discovery/posting date and evaluated status
+                        if dt < existing["dt"]:
+                            existing["dt"] = dt
+                            existing["date"] = event_obj["date"]
+                            existing["days_ago"] = days_ago
+                        if cand.get("source_table") == "jobs" and existing.get("source_table") != "jobs":
+                            existing["status"] = event_obj["status"]
+                            existing["source_table"] = "jobs"
+                        if is_same_item:
+                            existing["is_current"] = True
 
+    matched_events = list(by_posting_key.values())
     if len(matched_events) < 2:
         return []
 

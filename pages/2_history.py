@@ -165,7 +165,17 @@ def get_assessment(row):
     return get_fit_band(row.get("Score", 0), bool(row.get("Eligible", True)))
 
 
+def get_signals_badge(row):
+    risk = db.check_repost_risk(row.get("Company", ""), row.get("Position", ""), row.get("URL", ""))
+    if risk and risk.get("is_ghost_risk"):
+        return risk.get("badge_text", "👻 Relisted")
+    if risk:
+        return risk.get("badge_text", "🔄 Relisted")
+    return "✨ Fresh"
+
+
 df["Assessment"] = df.apply(get_assessment, axis=1)
+df["Signals"] = df.apply(get_signals_badge, axis=1)
 
 if filter_selection == "Strong Fit (75+)":
     df = df[df["Assessment"] == "✅ Strong Fit"]
@@ -208,7 +218,7 @@ def highlight_status(row):
     return [f"background-color: {colors.get(status, '')}"] * len(row)
 
 
-display_cols = ["Timestamp", "Position", "Company_Display", "Assessment", "Score", "Deadline_Display", "Application Status", "URL", "Red Flags"]
+display_cols = ["Timestamp", "Position", "Company_Display", "Assessment", "Score", "Signals", "Deadline_Display", "Application Status", "URL", "Red Flags"]
 valid_cols = [c for c in display_cols if c in df.columns]
 styled_df = df[valid_cols].rename(
     columns={"Company_Display": "Company", "Deadline_Display": "Deadline"}

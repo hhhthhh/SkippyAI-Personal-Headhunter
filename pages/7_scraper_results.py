@@ -170,7 +170,7 @@ else:
     evaluated_jobs = [j for j in source_jobs if j.get("status") == "evaluated"]
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Results Found", len(source_jobs))
+    m1.metric("Total Results Found", len(source_jobs))
     m2.metric("🆕 New", len(new_jobs))
     m3.metric("👁️ Seen", len(seen_jobs))
     m4.metric("✅ Evaluated", len(evaluated_jobs))
