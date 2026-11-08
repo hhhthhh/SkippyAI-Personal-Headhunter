@@ -836,7 +836,7 @@ def load_scraper_results() -> list[dict]:
             if payload_json:
                 try:
                     d = json.loads(payload_json)
-                    if r["status"] and "status" not in d:
+                    if r["status"]:
                         d["status"] = r["status"]
                     if r["source"] and "source" not in d:
                         d["source"] = r["source"]
@@ -1299,6 +1299,7 @@ def clear_all_history():
     try:
         with conn:
             conn.execute("DELETE FROM jobs")
+            conn.execute("UPDATE scraper_results SET status = 'new' WHERE status = 'evaluated'")
         clear_repost_cache()
     finally:
         conn.close()

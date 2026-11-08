@@ -293,12 +293,20 @@ def render_sankey_section(history_data: list[dict]):
         for k, lbl in stage_order
     }
 
+    stage_keys = [k for k, _ in stage_order]
+    default_stage_idx = 0
+    if not sankey_data.get("applied_all"):
+        if sankey_data.get("not_applied"):
+            default_stage_idx = stage_keys.index("not_applied")
+        elif sankey_data.get("ineligible"):
+            default_stage_idx = stage_keys.index("ineligible")
+
     selected_stage_key = st.selectbox(
         "Select Stage to View:",
-        options=[k for k, _ in stage_order],
+        options=stage_keys,
         format_func=lambda k: stage_labels.get(k, k),
         key="sankey_stage_filter_selection",
-        index=0
+        index=default_stage_idx
     )
     selected_jobs = sankey_data.get(selected_stage_key, [])
 

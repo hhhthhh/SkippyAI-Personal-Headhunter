@@ -133,16 +133,19 @@ if not discovered_jobs:
 
 else:
     eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
+    seen_urls, seen_li_ids = db.load_seen_job_identifiers()
 
-    # Update status: if evaluated in database, it upgrades to 'evaluated'
+    # Reconcile status with database truth: only 'evaluated' if currently in jobs table
     for j in discovered_jobs:
         raw_url = j.get("url") or j.get("original_url") or ""
         lid = db.extract_linkedin_job_id(j.get("id") or raw_url)
         norm_url = db.normalize_job_url(raw_url)
         if (lid and lid in eval_li_ids) or (norm_url and norm_url in eval_urls):
             j["status"] = "evaluated"
-        elif j.get("status") not in ("new", "seen", "evaluated"):
-            j["status"] = "new"
+        elif j.get("status") == "evaluated":
+            j["status"] = "seen" if ((lid and lid in seen_li_ids) or (norm_url and norm_url in seen_urls)) else "new"
+        elif j.get("status") not in ("new", "seen"):
+            j["status"] = "seen" if ((lid and lid in seen_li_ids) or (norm_url and norm_url in seen_urls)) else "new"
 
     available_sources = sorted(list({j.get("source_board") or j.get("source") or "Job Board Search" for j in discovered_jobs}))
 
