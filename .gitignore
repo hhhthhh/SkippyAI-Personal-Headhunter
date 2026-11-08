@@ -61,6 +61,8 @@ __pycache__/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+tests/
+test_*.py
 scratch/
 
 # ------------------------------------------------------------------------------

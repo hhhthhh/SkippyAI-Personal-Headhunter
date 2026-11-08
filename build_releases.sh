@@ -31,7 +31,7 @@ import os, sys, zipfile
 
 target_zip = sys.argv[1]
 items = sys.argv[2:]
-exclude_names = {"__pycache__", ".DS_Store", ".env", ".env.local", "skippy.db", "skippy.db-journal", "skippy.db-wal", "resume.md", "resumes.json", "profile_alignment.json", "custom_prompt.txt", "custom_user_prompt.txt", "app_settings.json", "inbox.json", "test_venv", "venv", ".venv", ".git", "portfolio-site", "portfoliosite", "scratch"}
+exclude_names = {"__pycache__", ".DS_Store", ".env", ".env.local", "skippy.db", "skippy.db-journal", "skippy.db-wal", "resume.md", "resumes.json", "profile_alignment.json", "custom_prompt.txt", "custom_user_prompt.txt", "app_settings.json", "inbox.json", "test_venv", "venv", ".venv", ".git", "portfolio-site", "portfoliosite", "scratch", "tests"}
 
 with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
     for item in items:
@@ -140,6 +140,7 @@ EXCLUDES=(
     -x "venv/*"
     -x ".venv/*"
     -x ".git/*"
+    -x "tests/*"
     -x "scratch/*"
     -x "portfolio-site/*"
     -x "portfoliosite/*"
