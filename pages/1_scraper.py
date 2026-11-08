@@ -18,6 +18,7 @@ from utils import (
     combine_selected_resumes,
     render_active_prompt_indicator,
     initialize_core_state,
+    render_pipeline_spinner_html,
 )
 import database as db
 from scraper import (
@@ -83,17 +84,23 @@ def render_active_scraper_pipeline():
     if status.get("is_running") and status.get("source") == "Scraper":
         with st.container(border=True):
             if status.get("is_stopping"):
-                st.subheader("🛑 Stopping Review...")
-                st.info("Halting background review pipeline gracefully...")
+                render_pipeline_spinner_html(
+                    "Stopping Review...",
+                    "Halting background review pipeline gracefully...",
+                    is_stopping=True,
+                )
                 st.button("🛑 Stopping...", key="stop_scraper_pipeline_main", disabled=True)
             else:
-                st.subheader("⚙️ Reviewing Jobs in the Background...")
                 total = max(status.get("total", 1), 1)
                 completed = status.get("completed", 0)
                 prog = min(completed / total, 1.0)
                 cur = status.get("current_job", "Initializing...")
                 if len(cur) > 60:
                     cur = cur[:57] + "..."
+                render_pipeline_spinner_html(
+                    "Reviewing Jobs in the Background...",
+                    f"Evaluating ({completed}/{total}): {cur}",
+                )
                 st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
                 st.info("💡 **You can freely explore other pages:** Reviewing continues in the background, and you'll be notified as soon as it's finished!")
                 if st.button("🛑 Stop Review", key="stop_scraper_pipeline_main"):

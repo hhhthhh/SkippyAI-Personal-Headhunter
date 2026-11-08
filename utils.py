@@ -562,6 +562,49 @@ def check_and_handle_pipeline_completion() -> bool:
             return True
     return False
 
+def render_pipeline_spinner_html(
+    title: str,
+    subtitle: str = "",
+    compact: bool = False,
+    is_stopping: bool = False,
+) -> None:
+    """Renders a continuous 60fps CSS spinner graphic alongside status text."""
+    ring_color = "#f59e0b" if is_stopping else "#3b82f6"
+    size_px = 18 if compact else 24
+    border_px = 2.5 if compact else 3
+    font_size = "0.95rem" if compact else "1.15rem"
+    sub_html = (
+        f"<div style='font-size:0.82rem; opacity:0.85; margin-top:2px;'>{subtitle}</div>"
+        if subtitle else ""
+    )
+    st.markdown(
+        f"""
+        <style>
+        @keyframes skippy-spin {{
+            0% {{ transform: rotate(0deg); }}
+            100% {{ transform: rotate(360deg); }}
+        }}
+        </style>
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+            <div style="
+                width:{size_px}px;
+                height:{size_px}px;
+                border:{border_px}px solid rgba(59, 130, 246, 0.2);
+                border-top:{border_px}px solid {ring_color};
+                border-radius:50%;
+                animation: skippy-spin 0.8s linear infinite;
+                flex-shrink:0;
+            "></div>
+            <div>
+                <div style="font-weight:600; font-size:{font_size}; line-height:1.25;">{title}</div>
+                {sub_html}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 @st.fragment(run_every="2s")
 def render_global_pipeline_status():
     check_and_handle_pipeline_completion()
@@ -569,13 +612,16 @@ def render_global_pipeline_status():
 
     # 1. If pipeline is running, render a live card in the sidebar
     if status.get("is_running"):
-        with st.sidebar.container(border=True):
+        with st.container(border=True):
             if status.get("is_stopping"):
-                st.markdown("🛑 **Stopping Review...**")
-                st.caption("Halting pipeline gracefully...")
+                render_pipeline_spinner_html(
+                    "Stopping Review...",
+                    "Halting pipeline gracefully...",
+                    compact=True,
+                    is_stopping=True,
+                )
                 st.button("🛑 Stopping...", key="btn_cancel_global_pipeline", width="stretch", disabled=True)
             else:
-                st.markdown("⚡ **Reviewing Jobs...**")
                 total = max(status.get("total", 1), 1)
                 completed = status.get("completed", 0)
                 prog = min(completed / total, 1.0)
@@ -583,6 +629,11 @@ def render_global_pipeline_status():
                 cur = status.get("current_job", "Working...")
                 if len(cur) > 35:
                     cur = cur[:32] + "..."
+                render_pipeline_spinner_html(
+                    "Reviewing Jobs...",
+                    f"{completed}/{status.get('total', 1)} reviewed",
+                    compact=True,
+                )
                 st.progress(prog, text=f"{completed}/{status.get('total', 1)} reviewed")
                 st.caption(f"📍 `{cur}`")
                 st.caption("💡 *You can freely browse other pages while this runs.*")
@@ -596,7 +647,7 @@ def render_global_pipeline_status():
         count = len(batch.get("jobs", []))
         src = batch.get("source", "Pipeline")
         was_cancelled = batch.get("was_cancelled", False)
-        with st.sidebar.container(border=True):
+        with st.container(border=True):
             if was_cancelled:
                 st.info(f"⏹️ **{count}** jobs saved before review was stopped ({src}).")
             else:
@@ -825,7 +876,8 @@ def setup_sidebar():
         unsafe_allow_html=True
     )
 
-    render_global_pipeline_status()
+    with st.sidebar:
+        render_global_pipeline_status()
 
     st.sidebar.header("🔌 LLM Configuration")
     
