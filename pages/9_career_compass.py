@@ -49,7 +49,7 @@ with st.container(border=True):
         if not resume_content.strip() and not (niche_hint and niche_hint.strip()):
             st.warning("⚠️ Please upload a master resume in Settings or enter an industry/trade focus above so Skippy can build your industry profile.")
         else:
-            with st.spinner("Analyzing background and building your industry profile..."):
+            with st.spinner("Analyzing background and building your industry profile (takes ~5–10 seconds)..."):
                 try:
                     synth_profile = career_compass.detect_alignment_with_ai(
                         resume_text=resume_content,
@@ -73,7 +73,7 @@ if not profile:
     col_a, col_b = st.columns([1, 1])
     with col_a:
         if st.button("⚡ Auto-Detect Career Profile from Resume", type="secondary", width="stretch"):
-            with st.spinner("Detecting alignment..."):
+            with st.spinner("Analyzing resume and detecting career alignment (takes ~5–10 seconds)..."):
                 existing_cs = (st.session_state.get("user_profile") or {}).get("custom_skills", [])
                 profile = career_compass.auto_detect_alignment_from_resume(
                     st.session_state.get("resume_text", ""),
@@ -130,7 +130,7 @@ if profile:
                     st.toast(f"🎯 Evaluator activated with {active_title} criteria!", icon="✅")
                     st.rerun()
             if st.button("⚡ Quick Re-Detect from Resume", key="compass_redetect", width="stretch"):
-                with st.spinner("Analyzing master resume..."):
+                with st.spinner("Analyzing master resume and recalibrating alignment (takes ~5–10 seconds)..."):
                     updated_profile = career_compass.auto_detect_alignment_from_resume(
                         st.session_state.get("resume_text", ""),
                         use_ai=True,
