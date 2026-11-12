@@ -93,16 +93,16 @@ When Skippy opens in your browser for the first time, you'll be guided through a
 ```
 +---------------------------------------------------------+
 |  1. Create your local password to protect your data     |
-|  2. Step 1: Connect your AI Provider & test connection  |
-|  3. Step 2: Add your Master Resume (file, sample, paste)|
-|  4. Step 3: Choose your Career Field & Direction        |
+|  2. Connect your AI Provider & test connection          |
+|  3. Add your Master Resume (file, sample, paste)        |
+|  4. Choose your Career Field & Direction                |
 +---------------------------------------------------------+
 ```
 
 ### 1. Create Your Local Password
 Skippy starts with a quick login screen where you set a password. This keeps your job applications, notes, and resumes private and safe on your computer.
 
-### 2. Step 1: Connect Your AI Provider
+### 2. Connect Your AI Provider
 An **API key** is like a password that lets Skippy communicate with an AI model:
 - **Recommended & Free:** **Google Gemini**
   - Go to [Google AI Studio](https://aistudio.google.com/).
@@ -111,7 +111,7 @@ An **API key** is like a password that lets Skippy communicate with an AI model:
 - **Other Providers:** You can also use OpenAI, Anthropic (Claude), or xAI (Grok) if you already have accounts there.
 - **Want 100% Free & Offline?** Install [Ollama](https://ollama.com/), select Ollama in the dropdown, and Skippy will run entirely on your own computer without touching the internet!
 
-### 3. Step 2: Add Your Master Resume
+### 3. Add Your Master Resume
 Your **Master Resume** is your complete work history containing all your jobs, skills, certifications, and projects:
 - **Drag & drop a file:** Upload your existing resume (`.docx`, `.pdf`, `.md`, or `.txt`).
 - **Test-drive with a sample:** Pick one of the built-in sample resumes to test Skippy right away.
@@ -119,7 +119,7 @@ Your **Master Resume** is your complete work history containing all your jobs, s
 
 Don't worry about keeping it under one page! Skippy will pick and choose the best parts of this master resume whenever it creates a custom version for a specific job.
 
-### 4. Step 3: Choose Your Career Field & Direction
+### 4. Choose Your Career Field & Direction
 Skippy works for any industry—from skilled trades, first responders, and military transitions to healthcare, corporate, and engineering:
 - **1-Click Auto-Detect:** Let AI read your resume and configure your career profile automatically.
 - **Pick a preset track:** Choose from common fields.
@@ -258,10 +258,5 @@ Right inside your Skippy folder! Your jobs and application stages live in <code>
 </details>
 
 ---
-
-## 👨‍💻 Created By
-
-Developed by **Hayden Tanaka**  
-*B.S. Cyber Intelligence and Security, Embry-Riddle Aeronautical University*
 
 Enjoying Skippy? Star the repository and share it with friends who are tackling the job hunt!

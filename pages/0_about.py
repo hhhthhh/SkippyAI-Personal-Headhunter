@@ -20,5 +20,4 @@ st.markdown(
     "- **Built-in Safety Shield:** Automatically blocks hidden text, invisible characters, and malicious code from untrusted job listings before sending them to the AI."
 )
 
-st.markdown("---")
-st.info("Developed by **Hayden Tanaka** — B.S. Cyber Intelligence and Security, Embry-Riddle Aeronautical University")
+
