@@ -1133,6 +1133,10 @@ def enforce_onboarding():
                     )
                     if ok:
                         st.success(f"✅ {msg}")
+                        if test_key:
+                            save_local_config(test_key)
+                            st.session_state["user_api_key"] = test_key
+                            st.toast("API Key verified and saved to .env! 🔑", icon="✅")
                     else:
                         st.error(f"❌ {msg}")
 

@@ -311,15 +311,18 @@ def test_ai_connection(
 
     except Exception as exc:
         err_str = str(exc)
+        err_low = err_str.lower()
         # Friendly translations of common provider errors
+        if "generative language api" in err_low or "permission_denied" in err_low or "403" in err_str:
+            return False, "Permission denied (403). Please make sure the 'Generative Language API' is enabled in your Google project."
         if "API_KEY_INVALID" in err_str or "401" in err_str or "invalid_api_key" in err_str:
-            return False, "Invalid API key. Please check your key from the provider dashboard."
+            return False, "Invalid API key. Please check your key from Google AI Studio (https://aistudio.google.com/app/apikey)."
         if "ConnectionRefused" in err_str or "Failed to establish a new connection" in err_str:
             return False, f"Could not connect to {local_base_url or 'localhost'}. Is your local model server running?"
-        if "quota" in err_str.lower() or "resource_exhausted" in err_str.lower():
+        if "quota" in err_low or "resource_exhausted" in err_low:
             return False, "API quota exceeded for this key. Please check your billing or plan limits."
-        if "503" in err_str or "high demand" in err_str.lower() or "serviceunavailable" in err_str.lower():
+        if "503" in err_str or "high demand" in err_low or "serviceunavailable" in err_low:
             return False, "Google's servers are temporarily experiencing high demand (503). Please wait a moment and try again."
-        if "rate_limit" in err_str.lower() or "429" in err_str:
+        if "rate_limit" in err_low or "429" in err_str:
             return False, "Rate limit reached on provider. Please wait a moment and try again."
         return False, f"Connection failed: {err_str[:160]}"

@@ -37,16 +37,7 @@ def _get_completion():
         litellm.suppress_debug_info = True
         try:
             litellm.register_model({
-                "gemini/gemini-1.5-flash": {
-                    "max_tokens": 8192,
-                    "input_cost_per_token": 0.000000075,
-                    "output_cost_per_token": 0.0000003,
-                    "cache_creation_input_token_cost": 0,
-                    "cache_read_input_token_cost": 0,
-                    "litellm_provider": "gemini",
-                    "mode": "chat",
-                },
-                "gemini/gemini-2.0-flash": {
+                "gemini/gemini-flash-latest": {
                     "max_tokens": 8192,
                     "input_cost_per_token": 0.0000001,
                     "output_cost_per_token": 0.0000004,
@@ -55,10 +46,28 @@ def _get_completion():
                     "litellm_provider": "gemini",
                     "mode": "chat",
                 },
-                "gemini/gemini-1.5-pro": {
+                "gemini/gemini-3.5-flash-lite": {
                     "max_tokens": 8192,
-                    "input_cost_per_token": 0.00000125,
-                    "output_cost_per_token": 0.000005,
+                    "input_cost_per_token": 0.000000075,
+                    "output_cost_per_token": 0.0000003,
+                    "cache_creation_input_token_cost": 0,
+                    "cache_read_input_token_cost": 0,
+                    "litellm_provider": "gemini",
+                    "mode": "chat",
+                },
+                "gemini/gemini-3.5-flash": {
+                    "max_tokens": 8192,
+                    "input_cost_per_token": 0.0000001,
+                    "output_cost_per_token": 0.0000004,
+                    "cache_creation_input_token_cost": 0,
+                    "cache_read_input_token_cost": 0,
+                    "litellm_provider": "gemini",
+                    "mode": "chat",
+                },
+                "gemini/gemini-3.8-flash": {
+                    "max_tokens": 8192,
+                    "input_cost_per_token": 0.0000001,
+                    "output_cost_per_token": 0.0000004,
                     "cache_creation_input_token_cost": 0,
                     "cache_read_input_token_cost": 0,
                     "litellm_provider": "gemini",
@@ -320,11 +329,12 @@ def execute_with_retry(api_call_func, max_attempts: int = 4):
 
 
 _GEMINI_FALLBACK_MODELS = (
-    "gemini/gemini-1.5-flash",
-    "gemini/gemini-2.0-flash",
     "gemini/gemini-flash-latest",
-    "gemini/gemini-2.5-flash",
-    "gemini/gemini-1.5-pro",
+    "gemini/gemini-3.5-flash-lite",
+    "gemini/gemini-3.8-flash",
+    "gemini/gemini-3.5-flash",
+    "gemini/gemini-flash-lite-latest",
+    "gemini/gemini-pro-latest",
 )
 
 
@@ -348,23 +358,8 @@ def resolve_model_id(
     if "Gemini" in model_choice:
         if override:
             return f"gemini/{override}"
-        # Inspect key signature to choose between public production and dev preview models
-        key_candidate = (api_key or "").strip().strip("'\"")
-        if not key_candidate:
-            try:
-                import streamlit as st
-                key_candidate = (st.session_state.get("user_api_key") or "").strip().strip("'\"")
-            except Exception:
-                pass
-        if not key_candidate:
-            key_candidate = os.environ.get("USER_API_KEY", "").strip().strip("'\"")
-
-        # Developer tokens (Antigravity CLI internal) route to gemini-flash-latest
-        if key_candidate.startswith("AQ.") or key_candidate.startswith("AQ"):
-            return "gemini/gemini-flash-latest"
-        # Standard public Google AI Studio keys (AIzaSy...) and all other keys route to gemini-1.5-flash
-        # for rock-solid stability and zero 503 high-demand spikes.
-        return "gemini/gemini-1.5-flash"
+        # gemini-flash-latest is Google's universal flash alias
+        return "gemini/gemini-flash-latest"
     elif "OpenAI" in model_choice or "ChatGPT" in model_choice:
         return f"openai/{override or 'gpt-4o-mini'}"
     elif "Grok" in model_choice:
