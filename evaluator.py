@@ -30,8 +30,10 @@ SCORE_WEIGHTS = {
 def _get_completion():
     global _completion_fn
     if _completion_fn is None:
-        from litellm import completion
-        _completion_fn = completion
+        import litellm
+        # LiteLLM prints "Provider List: ..." when it can't look up an alias like gemini-flash-latest
+        litellm.suppress_debug_info = True
+        _completion_fn = litellm.completion
     return _completion_fn
 
 
@@ -283,6 +285,13 @@ def execute_with_retry(api_call_func, max_attempts: int = 4):
             raise e
 
 
+_GEMINI_FALLBACK_MODELS = (
+    "gemini/gemini-flash-latest",
+    "gemini/gemini-3-flash-preview",
+    "gemini/gemini-2.5-flash",
+)
+
+
 def resolve_model_id(model_choice: str, local_model_name: str = None, model_override: str = "") -> str:
     override = (model_override or "").strip()
     if not override:
@@ -296,7 +305,7 @@ def resolve_model_id(model_choice: str, local_model_name: str = None, model_over
             override = ""
 
     if "Gemini" in model_choice:
-        return f"gemini/{override or 'gemini-3.8-flash'}"
+        return f"gemini/{override or 'gemini-flash-latest'}"
     elif "OpenAI" in model_choice or "ChatGPT" in model_choice:
         return f"openai/{override or 'gpt-4o-mini'}"
     elif "Grok" in model_choice:
@@ -308,6 +317,31 @@ def resolve_model_id(model_choice: str, local_model_name: str = None, model_over
     return model_choice
 
 
+_EEO_BOILERPLATE_RE = re.compile(
+    r"\n\s*(?:equal\s+opportunity\s+employer|eeo\s*/?\s*aa\s+statement|california\s+consumer\s+privacy\s+act|ccpa\s+privacy\s+notice|accommodation\s+for\s+applicants\s+with\s+disabilities)\b",
+    re.IGNORECASE,
+)
+
+
+def _prepare_job_text(job_text: str, skip_guard: bool = False, max_chars: int = 20000) -> tuple[str, dict]:
+    """Guards (unless skip_guard=True), trims trailing EEO/privacy boilerplate, and caps prompt length."""
+    if skip_guard:
+        guarded, findings = job_text or "", {}
+    else:
+        guarded, findings = run_posting_guard(job_text or "", mode="auto")
+    if len(guarded) > 2500:
+        m = _EEO_BOILERPLATE_RE.search(guarded, pos=int(len(guarded) * 0.6))
+        if m:
+            guarded = guarded[: m.start()].rstrip()
+    if max_chars and len(guarded) > max_chars:
+        guarded = guarded[:max_chars].rsplit(" ", 1)[0] + "\n...[truncated]"
+        findings = dict(findings)
+        findings["security_flags"] = list(findings.get("security_flags") or []) + [
+            f"Posting was longer than {max_chars:,} characters and was truncated before scoring; requirements near the end may be missing."
+        ]
+    return guarded, findings
+
+
 def call_unified_llm(
     prompt: str,
     model_choice: str,
@@ -317,7 +351,11 @@ def call_unified_llm(
     local_model_name: str = None,
     response_format=None,
     model_override: str = "",
+    timeout: int = None,
+    low_thinking: bool = True,
 ):
+    if timeout is None:
+        timeout = 300 if "Local" in (model_choice or "") else 45
     target_model = resolve_model_id(model_choice, local_model_name, model_override)
     
     messages = []
@@ -329,16 +367,35 @@ def call_unified_llm(
         "model": target_model,
         "messages": messages,
         "api_key": api_key or "not-needed",
+        "timeout": timeout,
+        "drop_params": True,
     }
     
-    if "Local" in model_choice and local_base_url:
+    if "Local" in (model_choice or "") and local_base_url:
         kwargs["api_base"] = local_base_url
 
     if response_format:
         kwargs["response_format"] = response_format
 
+    if low_thinking and "Gemini" in (model_choice or ""):
+        kwargs["reasoning_effort"] = "low"
+
     completion_fn = _get_completion()
-    return execute_with_retry(lambda: completion_fn(**kwargs))
+    try:
+        return execute_with_retry(lambda: completion_fn(**kwargs))
+    except Exception as first_err:
+        err_low = str(first_err).lower()
+        is_model_unavailable = "404" in err_low or "notfound" in err_low or "no longer available" in err_low or "not found" in err_low
+        if "Gemini" in (model_choice or "") and not (model_override or "").strip() and is_model_unavailable:
+            for candidate in _GEMINI_FALLBACK_MODELS:
+                if candidate == target_model:
+                    continue
+                try:
+                    fallback_kwargs = dict(kwargs, model=candidate)
+                    return execute_with_retry(lambda: completion_fn(**fallback_kwargs))
+                except Exception:
+                    continue
+        raise first_err
 
 
 def evaluate_job(
@@ -353,11 +410,7 @@ def evaluate_job(
     pre_security_flags: list[str] = None,
     skip_guard: bool = False,
 ) -> JobMatch:
-    if skip_guard:
-        guarded_job_text = job_text
-        guard_findings = {}
-    else:
-        guarded_job_text, guard_findings = run_posting_guard(job_text, mode="auto")
+    guarded_job_text, guard_findings = _prepare_job_text(job_text, skip_guard=skip_guard)
     clean_resume = sanitize_xml_boundary(resume_text)
     clean_job = sanitize_xml_boundary(guarded_job_text)
     prompt = f"""
@@ -396,7 +449,8 @@ def evaluate_job(
             local_base_url=local_base_url,
             local_model_name=local_model_name,
             response_format=JobMatch,
-            model_override=model_override
+            model_override=model_override,
+            low_thinking=False,  # keep full reasoning for scoring consistency
         )
         content = _strip_json_fences(response.choices[0].message.content)
         match_result = JobMatch.model_validate_json(content)
@@ -455,8 +509,6 @@ def _get_active_archetype_context() -> str:
         pass
     return ""
 
-_get_active_industry_context = _get_active_archetype_context
-
 
 def tailor_resume(
     master_resume: str,
@@ -466,8 +518,9 @@ def tailor_resume(
     local_base_url: str = "",
     local_model_name: str = "",
     model_override: str = "",
+    skip_guard: bool = False,
 ) -> str:
-    guarded_job, _ = run_posting_guard(job_description, mode="auto")
+    guarded_job, _ = _prepare_job_text(job_description, skip_guard=skip_guard)
     clean_resume = sanitize_xml_boundary(master_resume)
     clean_job = sanitize_xml_boundary(guarded_job)
     arch_ctx = _get_active_archetype_context()
@@ -531,8 +584,9 @@ def tailor_cover_letter(
     local_base_url: str = "",
     local_model_name: str = "",
     model_override: str = "",
+    skip_guard: bool = False,
 ) -> str:
-    guarded_job, _ = run_posting_guard(job_description, mode="auto")
+    guarded_job, _ = _prepare_job_text(job_description, skip_guard=skip_guard)
     clean_resume = sanitize_xml_boundary(master_resume)
     clean_job = sanitize_xml_boundary(guarded_job)
     arch_ctx = _get_active_archetype_context()
@@ -580,6 +634,7 @@ def review_and_refine_document(
     local_base_url: str = "",
     local_model_name: str = "",
     model_override: str = "",
+    skip_guard: bool = False,
 ) -> ReviewerAuditResult:
     """
     Runs the Reviewer & Factual Grounding Audit pass (inspired by ai-job-search's /apply Step 3-5):
@@ -589,7 +644,7 @@ def review_and_refine_document(
       4. Enforces anti-cliché rules (no em-dashes, no AI buzzwords) and ATS-safe ASCII date hyphens.
       5. Produces an ATS Keyword Coverage breakdown (Covered, Synonym-Only, Added from Profile, True Gap).
     """
-    guarded_job, _ = run_posting_guard(job_description, mode="auto")
+    guarded_job, _ = _prepare_job_text(job_description, skip_guard=skip_guard)
     clean_resume = sanitize_xml_boundary(master_resume)
     clean_job = sanitize_xml_boundary(guarded_job)
     clean_draft = sanitize_xml_boundary(draft_text)
@@ -706,8 +761,9 @@ def generate_interview_prep(
     cover_letter: str = "",
     interview_stage: str = "Full Loop (All Stages)",
     model_override: str = "",
+    skip_guard: bool = False,
 ) -> str:
-    guarded_job, _ = run_posting_guard(job_description, mode="auto")
+    guarded_job, _ = _prepare_job_text(job_description, skip_guard=skip_guard)
     clean_resume = sanitize_xml_boundary(master_resume)
     clean_job = sanitize_xml_boundary(guarded_job)
     clean_gaps = sanitize_xml_boundary(missing_skills or "None explicitly flagged")
@@ -813,12 +869,13 @@ def generate_application_qa(
     local_base_url: str = "",
     local_model_name: str = "",
     model_override: str = "",
+    skip_guard: bool = False,
 ) -> str:
     """
     Generates an Application Portal Q&A and Character-Counted Pitch Pack (inspired by 08-application-forms.md).
     Programmatically measures and annotates exact character and word counts so portal fields never truncate mid-word.
     """
-    guarded_job, _ = run_posting_guard(job_description, mode="auto")
+    guarded_job, _ = _prepare_job_text(job_description, skip_guard=skip_guard)
     clean_resume = sanitize_xml_boundary(master_resume)
     clean_job = sanitize_xml_boundary(guarded_job)
 
@@ -923,12 +980,13 @@ def generate_followup_note(
     tailored_resume: str = "",
     cover_letter: str = "",
     model_override: str = "",
+    skip_guard: bool = False,
 ) -> str:
     """
     Drafts a concise 60-120 word Follow-Up or Post-Interview Thank-You Note
     (inspired by /outcome Step 2b and 07-interview-prep.md).
     """
-    guarded_job, _ = run_posting_guard(job_description, mode="auto")
+    guarded_job, _ = _prepare_job_text(job_description, skip_guard=skip_guard)
     clean_resume = sanitize_xml_boundary(master_resume)
     clean_job = sanitize_xml_boundary(guarded_job)
     submitted_context = sanitize_xml_boundary(
@@ -993,13 +1051,14 @@ def generate_outreach_messages(
     local_model_name: str = "",
     tailored_resume: str = "",
     model_override: str = "",
+    skip_guard: bool = False,
 ) -> str:
     """
     Generates persona-tuned outreach materials:
     1. LinkedIn Connection Invitations (strictly <= 300 chars) for Hiring Manager, Recruiter, and Peer.
     2. High-converting direct cold email draft with subject line and 3-paragraph grounded pitch.
     """
-    guarded_job, _ = run_posting_guard(job_description, mode="auto")
+    guarded_job, _ = _prepare_job_text(job_description, skip_guard=skip_guard)
     clean_resume = sanitize_xml_boundary(master_resume)
     clean_job = sanitize_xml_boundary(guarded_job)
     comp = company_name.strip() or "Hiring Team"
@@ -1116,13 +1175,14 @@ def generate_deep_company_brief(
     local_base_url: str = "",
     local_model_name: str = "",
     model_override: str = "",
+    skip_guard: bool = False,
 ) -> str:
     """
     Generates a 6-axis Pre-Interview Intelligence Dossier ("Deep")
     covering business model, platform/tech stack, recent public signals, operational pain points,
     culture, and customized candidate strike-zone talking points.
     """
-    guarded_job, _ = run_posting_guard(job_description, mode="auto")
+    guarded_job, _ = _prepare_job_text(job_description, skip_guard=skip_guard)
     clean_resume = sanitize_xml_boundary(master_resume)
     clean_job = sanitize_xml_boundary(guarded_job)
     comp = company_name.strip() or "Target Employer"
@@ -2080,8 +2140,23 @@ def is_pdf_conversion_available() -> bool:
     return bool(shutil.which("soffice") or shutil.which("libreoffice"))
 
 
-@lru_cache(maxsize=64)
+_PDF_CACHE: dict = {}
+
+
 def generate_ats_resume_pdf(markdown_text: str, template_style: str = "classic") -> Optional[bytes]:
+    """Cached on success only, so a transient LibreOffice failure is retried next time."""
+    key = (markdown_text, template_style)
+    if key not in _PDF_CACHE:
+        pdf = _build_ats_resume_pdf(markdown_text, template_style)
+        if not pdf:
+            return None
+        if len(_PDF_CACHE) >= 64:
+            _PDF_CACHE.pop(next(iter(_PDF_CACHE)))
+        _PDF_CACHE[key] = pdf
+    return _PDF_CACHE[key]
+
+
+def _build_ats_resume_pdf(markdown_text: str, template_style: str = "classic") -> Optional[bytes]:
     """
     Converts the ATS-formatted resume into a ready-to-submit PDF (.pdf).
     Uses headless LibreOffice (`soffice --headless --convert-to pdf`) on the generated `.docx`

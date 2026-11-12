@@ -10,6 +10,8 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       - SKIPPY_WEBHOOK_HOST=0.0.0.0
+      # Single-file bind mount: avoid WAL side files that would not be persisted
+      - SKIPPY_SQLITE_JOURNAL=DELETE
       - LITELLM_DISABLE_REDACT_SECRETS=true
       - LITELLM_LOCAL_MODEL_COST_MAP=True
     volumes:

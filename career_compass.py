@@ -846,8 +846,6 @@ INDUSTRY_DEFINITIONS = {
     },
 }
 
-ARCHETYPE_DEFINITIONS = INDUSTRY_DEFINITIONS
-
 
 def score_quiz_responses(answers: dict[str, int], existing_custom_skills: Optional[List[str]] = None) -> dict[str, Any]:
     """
@@ -955,8 +953,6 @@ class AIArchetypeProfile(BaseModel):
         default="Technical depth, hands-on tool mastery, and domain problem-solving.",
         description="Explicit guidance for the job evaluation engine on what technical competencies and evidence to prioritize when scoring postings in this industry."
     )
-
-AIIndustryProfile = AIArchetypeProfile
 
 
 def detect_alignment_with_ai(

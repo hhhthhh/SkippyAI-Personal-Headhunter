@@ -1,5 +1,4 @@
 import streamlit as st
-from utils import setup_sidebar, enforce_onboarding
 
 st.title("🦘 About Skippy")
 st.markdown("---")

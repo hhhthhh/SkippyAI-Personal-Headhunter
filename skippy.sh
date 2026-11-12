@@ -9,8 +9,8 @@ echo "        🦘 Skippy - AI Job CRM (Mac/Linux Launch)      "
 echo "======================================================="
 echo ""
 
-# FAST BOOT: Check if the virtual environment is already built
-if [ ! -d "venv" ] || [ ! -f "venv/bin/activate" ]; then
+# FAST BOOT: Check if the virtual environment is already built and setup finished
+if [ ! -f "venv/.setup_complete" ] || [ ! -f "venv/bin/activate" ]; then
     echo "First-time setup detected. Setting up Skippy automatically..."
     echo ""
 
@@ -48,8 +48,17 @@ if [ ! -d "venv" ] || [ ! -f "venv/bin/activate" ]; then
         if command -v apt-get &>/dev/null; then
             echo "Package python3-venv is required on your system."
             echo "Attempting to install python3-venv (may require sudo password)..."
+            set +e
             sudo apt update && sudo apt install -y python3-venv
             $PYTHON_CMD -m venv venv
+            VENV_STATUS=$?
+            set -e
+            if [ $VENV_STATUS -ne 0 ]; then
+                echo "❌ Failed to create virtual environment."
+                echo "Please install python3-venv manually: sudo apt install -y python3-venv"
+                read -p "Press Enter to exit..."
+                exit 1
+            fi
         else
             echo "❌ Failed to create virtual environment."
             echo "Please ensure python3-venv is installed on your system."
@@ -74,6 +83,7 @@ if [ ! -d "venv" ] || [ ! -f "venv/bin/activate" ]; then
     fi
 
     echo ""
+    touch venv/.setup_complete
     echo "🎉 Setup complete! Launching Skippy..."
     sleep 1
 fi
@@ -89,6 +99,9 @@ if [ ! -s custom_prompt.txt ] && [ -f custom_prompt.template.txt ]; then
 fi
 if [ ! -s custom_user_prompt.txt ] && [ -f custom_prompt.template.txt ]; then
     cp custom_prompt.template.txt custom_user_prompt.txt 2>/dev/null || true
+fi
+if [ ! -s prompt_presets.json ] && [ -f prompt_presets.template.json ]; then
+    cp prompt_presets.template.json prompt_presets.json 2>/dev/null || true
 fi
 
 # Suppress Streamlit email prompt cleanly

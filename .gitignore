@@ -22,6 +22,7 @@ resumes.json
 profile_alignment.json
 custom_prompt.txt
 custom_user_prompt.txt
+prompt_presets.json
 app_settings.json
 *.docx
 *.pdf
@@ -109,3 +110,8 @@ Thumbs.db
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+# ------------------------------------------------------------------------------
+# 8. Agent Configurations & Local Tooling
+# ------------------------------------------------------------------------------
+.agents/

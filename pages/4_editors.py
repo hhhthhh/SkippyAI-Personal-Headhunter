@@ -17,7 +17,7 @@ from utils import (
 )
 from evaluator import render_ats_resume_html, generate_ats_resume_docx, generate_ats_resume_pdf, lint_ats_resume
 
-from database import atomic_write_text, atomic_write_json
+from database import atomic_write_json
 
 # 1. Guarantee state is initialized even if accessed directly via legacy routing
 initialize_core_state()
@@ -141,10 +141,10 @@ with r_col3:
         else:
             st.error("You must keep at least one resume in your vault.")
 
-if editor_view_mode == "📄 ATS Template Preview":
+if editor_view_mode == "📄 Clean Template Preview":
     current_vault_text = st.session_state.get("vault_resume_editor_text", resumes_vault.get(selected_resume_name, ""))
     st.markdown(render_ats_resume_html(current_vault_text, template_style="classic"), unsafe_allow_html=True)
-elif editor_view_mode == "🔀 Live Split View":
+elif editor_view_mode == "🔀 Split View (Edit & Preview)":
     sp1, sp2 = st.columns([1, 1.15])
     with sp1:
         current_vault_text = st.text_area(
@@ -270,21 +270,49 @@ if "preset_feedback" in st.session_state:
     elif fb_type == "error":
         st.error(fb_msg)
 
+DEFAULT_PRESETS = {
+    "Default Boilerplate": (
+        "You are an advanced automated job-matching engine and career risk analyst evaluating a candidate's master resume against a job description.\n\n"
+        "EVALUATION INSTRUCTIONS:\n"
+        "1. **Hard Stop Check:** Identify if the job demands an absolute legal or compliance requirement that is completely absent from the resume. If so, set `is_eligible` to False and `match_score` to 0.\n"
+        "2. **Skill Matching:** Do not penalize the candidate for missing verbatim keywords if their technical projects imply competence.\n"
+        "3. **Red Flag & Caveat Analysis:** Actively scan the job description for potential drawbacks, ambiguous expectations, heavy on-call demands, or red flags.\n"
+        "4. **Resume Recommendations:** Advise the applicant which words to include in their resume based off experience.\n"
+        "5. **Advisement:** Advise the applicant if they should apply for the position or not.\n"
+        "6. **Relevant skill check:** List some relevant skills that align with the user's technical experience and projects in the summary if they are eligible for the position and advised to apply."
+    ),
+    "Strict Keyword Matcher": (
+        "You are an ATS (Applicant Tracking System) screening algorithm.\n\n"
+        "EVALUATION INSTRUCTIONS:\n"
+        "1. Score the resume strictly on exact keyword matches found in the job description.\n"
+        "2. Generate a comprehensive list in the `missing_skills` array for any technical term, framework, or tool mentioned in the job description that does not explicitly appear in the resume."
+    ),
+    "Red Flag Detector": (
+        "You are a career risk analyst evaluating a candidate's master resume against a job description.\n\n"
+        "EVALUATION INSTRUCTIONS:\n"
+        "1. Scan the job description for potential drawbacks, ambiguous expectations, heavy on-call demands, or red flags.\n"
+        "2. Generate a comprehensive list in the `red_flags` array for any concerning aspects of the job description that may negatively impact the candidate's career or work-life balance."
+    )
+}
+
 def load_prompt_presets() -> dict:
-    if os.path.exists("prompt_presets.json"):
-        try:
-            with open("prompt_presets.json", "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-        except Exception:
-            pass
-    return {"Default Boilerplate": "You are an advanced automated job-matching engine..."}
+    for path in ("prompt_presets.json", "prompt_presets.template.json"):
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and data:
+                        return data
+            except Exception:
+                pass
+    return dict(DEFAULT_PRESETS)
 
 def save_prompt_presets(presets_data: dict):
     atomic_write_json("prompt_presets.json", presets_data, indent=4)
 
 presets = load_prompt_presets()
+if not presets:
+    presets = dict(DEFAULT_PRESETS)
 preset_names = list(presets.keys())
 
 # Apply pending widget updates before widgets are instantiated

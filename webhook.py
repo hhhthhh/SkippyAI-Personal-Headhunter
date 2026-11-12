@@ -1,12 +1,13 @@
 import os
+import hmac
 import json
 import threading
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from database import atomic_write_json, secure_file_permissions
+from database import atomic_write_json, secure_file_permissions, normalize_job_url
 
 app = FastAPI(title="Skippy Ingestion API")
 
@@ -57,7 +58,7 @@ def load_inbox_jobs() -> list[dict]:
 def save_inbox_jobs(jobs: list[dict]):
     """Thread-safe, atomic writer for inbox.json with owner-only permissions."""
     with _inbox_lock:
-        _write_inbox_unlocked(jobs)
+        _write_inbox_unlocked(jobs[:MAX_INBOX_SIZE])
 
 
 def remove_inbox_job_by_url(url: str):
@@ -91,20 +92,36 @@ class JobPayload(BaseModel):
     raw_text: str = Field(..., max_length=200_000)
 
 @app.post("/api/ingest")
-async def ingest_job(job: JobPayload):
+async def ingest_job(
+    job: JobPayload,
+    x_skippy_token: str | None = Header(default=None),
+):
+    expected_token = os.environ.get("SKIPPY_WEBHOOK_TOKEN", "").strip()
+    if expected_token and not hmac.compare_digest(x_skippy_token or "", expected_token):
+        raise HTTPException(status_code=401, detail="Invalid or missing webhook token.")
+
     clean_url = job.url.strip()
     if not (clean_url.startswith("http://") or clean_url.startswith("https://")):
         raise HTTPException(status_code=400, detail="Invalid URL: Only HTTP and HTTPS schemes are supported.")
 
+    norm_incoming = normalize_job_url(clean_url) or clean_url
+    payload_dict = job.model_dump()
+    payload_dict["url"] = clean_url
+
     with _inbox_lock:
         jobs = _read_inbox_unlocked()
+        for idx, existing in enumerate(jobs):
+            existing_url = existing.get("url", "")
+            if (normalize_job_url(existing_url) or existing_url) == norm_incoming:
+                jobs[idx] = payload_dict
+                _write_inbox_unlocked(jobs)
+                return {"status": "success", "message": "Job updated in inbox"}
+
         if len(jobs) >= MAX_INBOX_SIZE:
             raise HTTPException(
                 status_code=429,
                 detail=f"Inbox queue capacity reached ({MAX_INBOX_SIZE} jobs). Please evaluate or clear pending jobs in Skippy."
             )
-        payload_dict = job.model_dump()
-        payload_dict["url"] = clean_url
         jobs.append(payload_dict)
         _write_inbox_unlocked(jobs)
     

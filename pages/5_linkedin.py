@@ -20,7 +20,7 @@ from utils import (
     render_pipeline_spinner_html,
 )
 
-from webhook import load_inbox_jobs, save_inbox_jobs, clear_inbox
+from webhook import load_inbox_jobs, save_inbox_jobs, clear_inbox, remove_inbox_job_by_url
 from pipeline import pipeline_manager
 
 WEBHOOK_PORT = int(os.environ.get("SKIPPY_WEBHOOK_PORT", "8000"))

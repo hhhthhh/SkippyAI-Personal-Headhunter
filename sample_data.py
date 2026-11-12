@@ -238,7 +238,7 @@ def test_ai_connection(
         return False, "Please provide an API key before testing the connection."
 
     try:
-        from evaluator import resolve_model_id, _get_completion
+        from evaluator import resolve_model_id, _get_completion, _GEMINI_FALLBACK_MODELS
 
         target_model = resolve_model_id(
             model_choice=model_choice,
@@ -265,7 +265,29 @@ def test_ai_connection(
         else:
             kwargs["api_key"] = clean_key
 
-        response = completion_fn(**kwargs)
+        try:
+            response = completion_fn(**kwargs)
+        except Exception as first_err:
+            err_low = str(first_err).lower()
+            is_model_unavailable = "404" in err_low or "notfound" in err_low or "no longer available" in err_low or "not found" in err_low
+            if "Gemini" in (model_choice or "") and is_model_unavailable:
+                response = None
+                last_err = first_err
+                for candidate in _GEMINI_FALLBACK_MODELS:
+                    if candidate == target_model:
+                        continue
+                    try:
+                        kwargs["model"] = candidate
+                        target_model = candidate
+                        response = completion_fn(**kwargs)
+                        break
+                    except Exception as next_err:
+                        last_err = next_err
+                if response is None:
+                    raise last_err
+            else:
+                raise first_err
+
         if response and response.choices:
             return True, f"Connection verified successfully! Connected to {target_model}."
         return True, "Connection verified successfully!"

@@ -13,10 +13,17 @@ st.set_page_config(page_title="Skippy - AI Job CRM", layout="wide")
 # 2. Interactive Hover & Halo Effects (Preserving 100% native theme/colors)
 inject_interactive_hover_halo_effects()
 
+@st.cache_data(max_entries=4)
+def _inbox_count(mtime: float) -> int:
+    from webhook import load_inbox_jobs
+    return len(load_inbox_jobs())
+
+
 def get_extension_inbox_title() -> str:
     try:
-        from webhook import load_inbox_jobs
-        count = len(load_inbox_jobs())
+        from webhook import INBOX_FILE, load_inbox_jobs
+        # Re-parse inbox.json only when the file changes (it can hold ~20 MB of text)
+        count = _inbox_count(os.path.getmtime(INBOX_FILE)) if os.path.exists(INBOX_FILE) else len(load_inbox_jobs())
         return f"Extension Inbox ({count})" if count > 0 else "Extension Inbox"
     except Exception:
         return "Extension Inbox"

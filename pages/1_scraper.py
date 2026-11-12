@@ -7,11 +7,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import pandas as pd
 import streamlit as st
-from playwright.sync_api import sync_playwright
 
 from utils import (
-    setup_sidebar,
-    enforce_onboarding,
     render_completion_card,
     check_and_handle_pipeline_completion,
     render_resume_selector,
@@ -19,10 +16,11 @@ from utils import (
     render_active_prompt_indicator,
     initialize_core_state,
     render_pipeline_spinner_html,
+    start_scraper_evaluations as process_evaluations,
+    render_active_scraper_pipeline_banner,
 )
 import database as db
 from scraper import (
-    scrape_job_text,
     scrape_universal_search_results,
     is_safe_url,
     search_linkedin_guest,
@@ -49,66 +47,7 @@ if "native_search_results" not in st.session_state or not st.session_state["nati
         st.session_state["native_search_source_label"] = cached_scraper_results[0].get("source_board") or cached_scraper_results[0].get("source") or "Job Board Search"
 
 
-def process_evaluations(items: list):
-    """Starts the background evaluation pipeline for a list of URLs or pre-fetched job dicts."""
-    if pipeline_manager.is_running:
-        st.warning("⚠️ An evaluation pipeline is already running in the background. Please wait for it to complete or stop it from the sidebar.")
-        return
-
-    chosen_resumes = st.session_state.get("selected_resumes", ["Master Resume"])
-    combined_resume = combine_selected_resumes(chosen_resumes)
-    st.session_state.resume_text = combined_resume
-
-    started = pipeline_manager.start_url_pipeline(
-        urls=items,
-        resume_text=combined_resume,
-        system_instructions=st.session_state.system_instructions,
-        model_choice=st.session_state.get("model_choice", "Google Gemini"),
-        api_key=st.session_state.get("user_api_key", ""),
-        local_base_url=st.session_state.get("local_base_url", ""),
-        local_model_name=st.session_state.get("local_model_name", ""),
-        model_override=st.session_state.get("model_override", ""),
-        source="Scraper",
-        matched_resumes=", ".join(chosen_resumes),
-    )
-    if started:
-        if "completion_batch" in st.session_state:
-            del st.session_state["completion_batch"]
-        st.rerun()
-
-
-@st.fragment(run_every="2s")
-def render_active_scraper_pipeline():
-    check_and_handle_pipeline_completion()
-    status = pipeline_manager.get_status()
-    if status.get("is_running") and status.get("source") == "Scraper":
-        with st.container(border=True):
-            if status.get("is_stopping"):
-                render_pipeline_spinner_html(
-                    "Stopping Review...",
-                    "Halting background review pipeline gracefully...",
-                    is_stopping=True,
-                )
-                st.button("🛑 Stopping...", key="stop_scraper_pipeline_main", disabled=True)
-            else:
-                total = max(status.get("total", 1), 1)
-                completed = status.get("completed", 0)
-                prog = min(completed / total, 1.0)
-                cur = status.get("current_job", "Initializing...")
-                if len(cur) > 60:
-                    cur = cur[:57] + "..."
-                render_pipeline_spinner_html(
-                    "Reviewing Jobs in the Background...",
-                    f"Evaluating ({completed}/{total}): {cur}",
-                )
-                st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
-                st.info("💡 **You can freely explore other pages:** Reviewing continues in the background, and you'll be notified as soon as it's finished!")
-                if st.button("🛑 Stop Review", key="stop_scraper_pipeline_main"):
-                    pipeline_manager.cancel()
-                    st.rerun()
-
-
-render_active_scraper_pipeline()
+render_active_scraper_pipeline_banner("stop_scraper_pipeline_main")
 
 # Accessible Completion Card displayed if a run just completed
 if "completion_batch" in st.session_state:
@@ -121,7 +60,8 @@ if "completion_batch" in st.session_state:
 # Quick-Start Guide for first-time or new users
 show_quick_start = st.session_state.get("show_quick_start", False)
 dismissed = db.get_setting("dismissed_quick_start", "") == "true"
-has_evaluated_jobs = bool(db.load_job_urls())
+eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
+has_evaluated_jobs = bool(eval_urls or eval_li_ids)
 
 if (show_quick_start or not has_evaluated_jobs) and not dismissed:
     with st.container(border=True):
@@ -151,8 +91,8 @@ if (show_quick_start or not has_evaluated_jobs) and not dismissed:
         with col_demo:
             if st.button("🧪 Try a Sample Job Listing", type="secondary", width="stretch", help="Pre-populates a sample job description so you can test the review engine immediately."):
                 sample_job = SAMPLE_JOBS[0]
-                st.session_state["manual_job_text_buffer"] = sample_job["text"]
-                st.session_state["selected_scraper_mode_idx"] = 1  # "📝 Paste Job Text"
+                st.session_state["manual_job_text_input"] = sample_job["text"]
+                st.session_state["scraper_mode_radio"] = "📝 Paste Job Text"
                 st.toast(f"Loaded '{sample_job['title']}' sample job posting!", icon="📋")
                 st.rerun()
 
@@ -164,15 +104,16 @@ mode_options = [
     "🌐 Paste Multiple Links",
     "🧭 Search by Category",
 ]
-default_mode_idx = st.session_state.pop("selected_scraper_mode_idx", 0)
-if default_mode_idx >= len(mode_options):
-    default_mode_idx = 0
+if "selected_scraper_mode_idx" in st.session_state:
+    idx = st.session_state.pop("selected_scraper_mode_idx")
+    if isinstance(idx, int) and 0 <= idx < len(mode_options):
+        st.session_state["scraper_mode_radio"] = mode_options[idx]
 
 selected_mode = st.radio(
     "Choose How to Add Jobs:",
     mode_options,
-    index=default_mode_idx,
-    horizontal=True
+    horizontal=True,
+    key="scraper_mode_radio",
 )
 
 
@@ -459,13 +400,17 @@ if selected_mode == "🔎 Job Board Search":
 elif selected_mode == "📝 Paste Job Text":
     st.subheader("📝 Paste Job Text")
     st.caption("🛡️ Protected by **Job Text Safety Shield**: hidden text, invisible symbols, and malicious commands are automatically removed.")
-    prefill_job_text = st.session_state.pop("manual_job_text_buffer", "")
+    if "manual_job_text_buffer" in st.session_state:
+        st.session_state["manual_job_text_input"] = st.session_state.pop("manual_job_text_buffer")
     with st.form("manual_paste_form"):
-        job_description = st.text_area("Paste Job Description Here:", value=prefill_job_text, height=250)
+        job_description = st.text_area("Paste Job Description Here:", height=250, key="manual_job_text_input")
         submitted = st.form_submit_button("Review Job with AI", type="primary")
 
     if submitted:
-        if not job_description.strip() or not st.session_state.resume_text.strip():
+        chosen_resumes = st.session_state.get("selected_resumes", ["Master Resume"])
+        active_resume_text = combine_selected_resumes(chosen_resumes) or st.session_state.get("resume_text", "")
+        st.session_state.resume_text = active_resume_text
+        if not job_description.strip() or not active_resume_text.strip():
             st.warning("Please provide both the master resume and job description.")
         else:
             with st.spinner("Checking safety & analyzing alignment with AI..."):
@@ -477,14 +422,16 @@ elif selected_mode == "📝 Paste Job Text":
                             st.warning(sf)
 
                     result = evaluate_job(
-                        st.session_state.resume_text,
+                        active_resume_text,
                         cleaned_job_text,
                         st.session_state.system_instructions,
                         st.session_state.get("model_choice"),
                         st.session_state.get("user_api_key"),
                         st.session_state.get("local_base_url"),
                         st.session_state.get("local_model_name"),
+                        st.session_state.get("model_override", ""),
                         pre_security_flags=sec_flags,
+                        skip_guard=True,
                     )
                     resolved_company = result.company_name if result.company_name != "Unknown Company" else ""
                     match_data = {
@@ -555,8 +502,8 @@ elif selected_mode == "🌐 Paste Multiple Links":
             if not safe_urls:
                 st.warning("No valid public HTTP/HTTPS URLs provided.")
             else:
-                seen_urls = db.load_job_urls()
-                new_urls = [u for u in safe_urls if u not in seen_urls]
+                eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
+                new_urls = [u for u in safe_urls if db.classify_posting(u, eval_urls, eval_li_ids, set(), set()) != "evaluated"]
                 skipped = len(safe_urls) - len(new_urls)
                 if skipped > 0:
                     st.info(f"⏭ Skipped {skipped} previously evaluated postings.")
@@ -613,8 +560,8 @@ elif selected_mode == "🧭 Search by Category":
             if not discovered_urls:
                 st.warning("No job posting links could be extracted from this page.")
             else:
-                seen_urls = db.load_job_urls()
-                new_urls = [u for u in discovered_urls if u not in seen_urls]
+                eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
+                new_urls = [u for u in discovered_urls if db.classify_posting(u, eval_urls, eval_li_ids, set(), set()) != "evaluated"]
                 skipped = len(discovered_urls) - len(new_urls)
                 if skipped > 0:
                     st.info(f"⏭️ Skipped {skipped} previously evaluated postings.")

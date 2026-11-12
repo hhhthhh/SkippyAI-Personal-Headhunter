@@ -9,9 +9,10 @@ from typing import List, Dict, Any, Optional
 from playwright.sync_api import sync_playwright
 
 import database as db
-from scraper import scrape_job_text, scrape_job_with_guard, normalize_linkedin_job_id
+from scraper import scrape_job_with_guard, normalize_linkedin_job_id
+from posting_guard import guard as run_posting_guard
 from evaluator import evaluate_job
-from webhook import load_inbox_jobs, save_inbox_jobs, remove_inbox_job_by_url
+from webhook import remove_inbox_job_by_url
 
 
 class PipelineManager:
@@ -103,7 +104,8 @@ class PipelineManager:
             self.is_stopping = False
 
     def _start_worker_thread(self, target_fn, items, resume_text, system_instructions, model_choice,
-                             api_key, local_base_url, local_model_name, model_override, source, matched_resumes, initial_msg):
+                             api_key, local_base_url, local_model_name, model_override, source, matched_resumes, initial_msg,
+                             on_item_saved=None):
         with self._lock:
             if self.is_running:
                 return False
@@ -125,7 +127,7 @@ class PipelineManager:
         self._thread = threading.Thread(
             target=target_fn,
             args=(items, resume_text, system_instructions, model_choice,
-                  api_key, local_base_url, local_model_name, model_override, source, matched_resumes),
+                  api_key, local_base_url, local_model_name, model_override, source, matched_resumes, on_item_saved),
             daemon=True
         )
         self._thread.start()
@@ -166,9 +168,9 @@ class PipelineManager:
     ) -> bool:
         """Launches a background thread to evaluate jobs from the LinkedIn extension inbox."""
         return self._start_worker_thread(
-            self._run_inbox_worker, pending_jobs, resume_text, system_instructions, model_choice,
+            self._run_url_worker, pending_jobs, resume_text, system_instructions, model_choice,
             api_key, local_base_url, local_model_name, model_override, source, matched_resumes,
-            "Initializing inbox evaluation..."
+            "Initializing inbox evaluation...", on_item_saved=remove_inbox_job_by_url
         )
 
     def _persist_evaluation_result(
@@ -221,55 +223,40 @@ class PipelineManager:
             self.completed_jobs += 1
         return match_data
 
-    def _evaluate_and_persist_posting(
-        self,
-        *,
-        url: str,
-        job_text: str,
-        resume_text: str,
-        system_instructions: str,
-        model_choice: str,
-        api_key: str,
-        local_base_url: str,
-        local_model_name: str,
-        model_override: str,
-        source: str,
-        preset_title: str = "",
-        preset_company: str = "",
-        pre_security_flags: Optional[list[str]] = None,
-        matched_resumes: str = "",
-    ) -> dict:
-        """Shared evaluation & database persistence helper used by workers."""
-        result = evaluate_job(
-            resume_text=resume_text,
-            job_text=job_text,
-            system_instructions=system_instructions,
-            model_choice=model_choice,
-            api_key=api_key,
-            local_base_url=local_base_url,
-            local_model_name=local_model_name,
-            model_override=model_override,
-            pre_security_flags=pre_security_flags or [],
-            skip_guard=bool(pre_security_flags is not None),
-        )
-        return self._persist_evaluation_result(
-            result=result,
-            url=url,
-            job_text=job_text,
-            source=source,
-            preset_title=preset_title,
-            preset_company=preset_company,
-            matched_resumes=matched_resumes,
-        )
-
     def _run_url_worker(
         self, urls, resume_text, system_instructions, model_choice,
-        api_key, local_base_url, local_model_name, model_override, source, matched_resumes=""
+        api_key, local_base_url, local_model_name, model_override, source, matched_resumes="",
+        on_item_saved=None
     ):
         playwright_ctx = None
         browser = None
         shared_page = None
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        # Cloud LLM calls are network-bound; local models (Ollama) stay serial.
+        max_workers = 1 if "Local" in (model_choice or "") else 4
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        pending = {}
+
+        def _drain(block: bool):
+            done, _ = concurrent.futures.wait(
+                list(pending), timeout=0.15 if block else 0, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for fut in done:
+                url_, job_text_, p_title, p_company = pending.pop(fut)
+                if self._stop_event.is_set():
+                    continue
+                try:
+                    self._persist_evaluation_result(
+                        result=fut.result(), url=url_, job_text=job_text_, source=source,
+                        preset_title=p_title, preset_company=p_company, matched_resumes=matched_resumes,
+                    )
+                    if on_item_saved:
+                        on_item_saved(url_)
+                except Exception as e:
+                    print(f"[Pipeline Error] {url_}: {e}")
+                    with self._lock:
+                        self.failed_jobs += 1
+                        self.last_error = str(e)
+
         try:
             for i, item in enumerate(urls):
                 if self._stop_event.is_set():
@@ -279,7 +266,7 @@ class PipelineManager:
                     url = item.get("url", "")
                     preset_title = item.get("title", "")
                     preset_company = item.get("company", "")
-                    raw_text = item.get("raw_text", "")
+                    raw_text = item.get("raw_text") or item.get("description", "")
                     pre_flags = list(item.get("security_flags") or [])
                     display_label = f"{preset_title} ({preset_company})" if preset_title and preset_company else (preset_title or url)
                 else:
@@ -297,9 +284,13 @@ class PipelineManager:
                 if self._stop_event.is_set():
                     break
 
-                if raw_text and len(raw_text.strip()) > 50:
-                    job_text = raw_text
-                    sec_flags = pre_flags
+                if raw_text and (len(raw_text.strip()) > 50 or on_item_saved is not None):
+                    if isinstance(item, dict) and "security_flags" in item:
+                        job_text = raw_text
+                        sec_flags = pre_flags
+                    else:
+                        job_text, guard_res = run_posting_guard(raw_text, mode="auto")
+                        sec_flags = list(guard_res.get("security_flags") or [])
                 elif normalize_linkedin_job_id(url):
                     # LinkedIn URLs resolve via fast unauthenticated Guest API first
                     job_text, sec_flags = scrape_job_with_guard(url, page=None)
@@ -325,54 +316,31 @@ class PipelineManager:
                         all_sec_flags.append(fl)
 
                 if not job_text.startswith("Error"):
-                    try:
-                        # Submit LLM evaluation to executor so stop_event can halt without waiting
-                        future = executor.submit(
-                            evaluate_job,
-                            resume_text=resume_text,
-                            job_text=job_text,
-                            system_instructions=system_instructions,
-                            model_choice=model_choice,
-                            api_key=api_key,
-                            local_base_url=local_base_url,
-                            local_model_name=local_model_name,
-                            model_override=model_override,
-                            pre_security_flags=all_sec_flags,
-                            skip_guard=bool(all_sec_flags),
-                        )
-
-                        while not future.done():
-                            if self._stop_event.wait(timeout=0.15):
-                                break
-
-                        if self._stop_event.is_set():
-                            # User stopped pipeline; halt immediately and discard in-flight job
-                            break
-
-                        result = future.result()
-                        self._persist_evaluation_result(
-                            result=result,
-                            url=url,
-                            job_text=job_text,
-                            source=source,
-                            preset_title=preset_title,
-                            preset_company=preset_company,
-                            matched_resumes=matched_resumes,
-                        )
-                    except Exception as e:
-                        if not self._stop_event.is_set():
-                            print(f"[Pipeline Error] {url}: {e}")
-                            with self._lock:
-                                self.failed_jobs += 1
-                                self.last_error = str(e)
+                    pending[executor.submit(
+                        evaluate_job,
+                        resume_text=resume_text,
+                        job_text=job_text,
+                        system_instructions=system_instructions,
+                        model_choice=model_choice,
+                        api_key=api_key,
+                        local_base_url=local_base_url,
+                        local_model_name=local_model_name,
+                        model_override=model_override,
+                        pre_security_flags=all_sec_flags,
+                        skip_guard=True,
+                    )] = (url, job_text, preset_title, preset_company)
+                    # Keep at most max_workers evaluations in flight
+                    while len(pending) >= max_workers and not self._stop_event.is_set():
+                        _drain(block=True)
                 else:
                     print(f"[Pipeline Warning] Skipped {url}: {job_text}")
                     with self._lock:
                         self.failed_jobs += 1
                         self.last_error = job_text
+                _drain(block=False)
 
-                if i < len(urls) - 1 and not self._stop_event.is_set():
-                    time.sleep(0.05 if raw_text else 0.2)
+            while pending and not self._stop_event.is_set():
+                _drain(block=True)
         except Exception as e:
             print(f"[Pipeline Fatal Error]: {e}")
             with self._lock:
@@ -392,84 +360,6 @@ class PipelineManager:
                     playwright_ctx.stop()
                 except Exception:
                     pass
-            with self._lock:
-                self.is_running = False
-                self.is_stopping = False
-                self.was_cancelled = self._stop_event.is_set()
-                self.finish_timestamp = time.time()
-                self.has_unnotified_completion = True
-
-    def _run_inbox_worker(
-        self, pending_jobs, resume_text, system_instructions, model_choice,
-        api_key, local_base_url, local_model_name, model_override, source, matched_resumes=""
-    ):
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        try:
-            for i, job_data in enumerate(pending_jobs):
-                if self._stop_event.is_set():
-                    break
-
-                title = job_data.get("title", "Unknown Role")
-                with self._lock:
-                    self.current_job_name = title
-
-                # Immediate check before evaluation
-                if self._stop_event.is_set():
-                    break
-
-                try:
-                    future = executor.submit(
-                        evaluate_job,
-                        resume_text=resume_text,
-                        job_text=job_data.get("raw_text", ""),
-                        system_instructions=system_instructions,
-                        model_choice=model_choice,
-                        api_key=api_key,
-                        local_base_url=local_base_url,
-                        local_model_name=local_model_name,
-                        model_override=model_override,
-                        pre_security_flags=list(job_data.get("security_flags") or []),
-                        skip_guard=bool(job_data.get("security_flags")),
-                    )
-
-                    while not future.done():
-                        if self._stop_event.wait(timeout=0.15):
-                            break
-
-                    if self._stop_event.is_set():
-                        # Stopped while evaluation was running; do not remove from inbox!
-                        break
-
-                    result = future.result()
-                    self._persist_evaluation_result(
-                        result=result,
-                        url=job_data.get("url", ""),
-                        job_text=job_data.get("raw_text", ""),
-                        source=source,
-                        preset_title=title,
-                        preset_company=job_data.get("company") or "",
-                        matched_resumes=matched_resumes,
-                    )
-                    # Atomically remove evaluated job from inbox.json only when finished
-                    remove_inbox_job_by_url(job_data.get("url", ""))
-                except Exception as e:
-                    if not self._stop_event.is_set():
-                        print(f"[Pipeline Error] {title}: {e}")
-                        with self._lock:
-                            self.failed_jobs += 1
-                            self.last_error = str(e)
-
-                if i < len(pending_jobs) - 1 and not self._stop_event.is_set():
-                    time.sleep(0.05)
-        except Exception as e:
-            print(f"[Pipeline Fatal Error]: {e}")
-            with self._lock:
-                self.last_error = str(e)
-        finally:
-            try:
-                executor.shutdown(wait=False, cancel_futures=True)
-            except Exception:
-                pass
             with self._lock:
                 self.is_running = False
                 self.is_stopping = False

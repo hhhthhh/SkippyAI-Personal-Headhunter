@@ -16,6 +16,8 @@ from utils import (
     render_active_prompt_indicator,
     initialize_core_state,
     render_pipeline_spinner_html,
+    start_scraper_evaluations as process_evaluations,
+    render_active_scraper_pipeline_banner,
 )
 import database as db
 from pipeline import pipeline_manager
@@ -27,67 +29,7 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ Settings & Filters")
 max_jobs = st.sidebar.slider("Max Jobs to Review", min_value=1, max_value=50, value=5, step=1, key="scraper_results_max_jobs")
 
-
-def process_evaluations(items: list):
-    """Starts the background evaluation pipeline for a list of job dicts or URLs."""
-    if pipeline_manager.is_running:
-        st.warning("⚠️ An evaluation pipeline is already running in the background. Please wait for it to complete or stop it from the sidebar.")
-        return
-
-    chosen_resumes = st.session_state.get("selected_resumes", ["Master Resume"])
-    combined_resume = combine_selected_resumes(chosen_resumes)
-    st.session_state.resume_text = combined_resume
-
-    started = pipeline_manager.start_url_pipeline(
-        urls=items,
-        resume_text=combined_resume,
-        system_instructions=st.session_state.system_instructions,
-        model_choice=st.session_state.get("model_choice", "Google Gemini"),
-        api_key=st.session_state.get("user_api_key", ""),
-        local_base_url=st.session_state.get("local_base_url", ""),
-        local_model_name=st.session_state.get("local_model_name", ""),
-        model_override=st.session_state.get("model_override", ""),
-        source="Scraper",
-        matched_resumes=", ".join(chosen_resumes),
-    )
-    if started:
-        if "completion_batch" in st.session_state:
-            del st.session_state["completion_batch"]
-        st.rerun()
-
-
-@st.fragment(run_every="2s")
-def render_active_results_pipeline():
-    check_and_handle_pipeline_completion()
-    status = pipeline_manager.get_status()
-    if status.get("is_running") and status.get("source") == "Scraper":
-        with st.container(border=True):
-            if status.get("is_stopping"):
-                render_pipeline_spinner_html(
-                    "Stopping Review...",
-                    "Halting background review pipeline gracefully...",
-                    is_stopping=True,
-                )
-                st.button("🛑 Stopping...", key="stop_results_pipeline_main", disabled=True)
-            else:
-                total = max(status.get("total", 1), 1)
-                completed = status.get("completed", 0)
-                prog = min(completed / total, 1.0)
-                cur = status.get("current_job", "Initializing...")
-                if len(cur) > 60:
-                    cur = cur[:57] + "..."
-                render_pipeline_spinner_html(
-                    "Reviewing Jobs in the Background...",
-                    f"Evaluating ({completed}/{total}): {cur}",
-                )
-                st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
-                st.info("💡 **You can freely explore other pages:** Reviewing continues in the background while you browse.")
-                if st.button("🛑 Stop Review", key="stop_results_pipeline_main"):
-                    pipeline_manager.cancel()
-                    st.rerun()
-
-
-render_active_results_pipeline()
+render_active_scraper_pipeline_banner("stop_results_pipeline_main")
 
 # Accessible Completion Card displayed if a run just completed
 if "completion_batch" in st.session_state:

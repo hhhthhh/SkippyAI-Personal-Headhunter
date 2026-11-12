@@ -64,20 +64,27 @@ fi
 if [ ! -s custom_user_prompt.txt ] && [ -f custom_prompt.template.txt ]; then
     cp custom_prompt.template.txt custom_user_prompt.txt 2>/dev/null || true
 fi
-touch skippy.db .env resume.md custom_prompt.txt custom_user_prompt.txt profile_alignment.json app_settings.json 2>/dev/null || true
+touch skippy.db .env resume.md custom_prompt.txt custom_user_prompt.txt profile_alignment.json prompt_presets.json app_settings.json 2>/dev/null || true
 if [ ! -s resumes.json ]; then
     echo "{}" > resumes.json 2>/dev/null || true
 fi
 if [ ! -s inbox.json ]; then
     echo "[]" > inbox.json 2>/dev/null || true
 fi
+if [ ! -s profile_alignment.json ]; then
+    echo "{}" > profile_alignment.json 2>/dev/null || true
+fi
 if [ ! -s prompt_presets.json ]; then
-    echo "{}" > prompt_presets.json 2>/dev/null || true
+    if [ -f prompt_presets.template.json ]; then
+        cp prompt_presets.template.json prompt_presets.json 2>/dev/null || true
+    else
+        echo "{}" > prompt_presets.json 2>/dev/null || true
+    fi
 fi
 if [ ! -s app_settings.json ]; then
     echo "{}" > app_settings.json 2>/dev/null || true
 fi
-chmod 600 skippy.db .env resume.md resumes.json inbox.json custom_prompt.txt custom_user_prompt.txt profile_alignment.json app_settings.json 2>/dev/null || true
+chmod 600 skippy.db .env resume.md resumes.json inbox.json custom_prompt.txt custom_user_prompt.txt profile_alignment.json prompt_presets.json app_settings.json 2>/dev/null || true
 
 echo "🚀 Building and starting the Skippy container..."
 $DOCKER_COMPOSE up -d --build

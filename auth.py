@@ -34,7 +34,7 @@ _DUMMY_STORED_HASH = f"pbkdf2_sha256:{PBKDF2_ITERATIONS}:{_DUMMY_SALT_HEX}:{_DUM
 
 from database import secure_file_permissions as _secure_file_permissions, set_env_var_safe
 
-_auth_tables_initialized = False
+_auth_tables_initialized_path: str | None = None
 
 def _set_env_var_safe(key: str, value: str):
     set_env_var_safe(key, value, env_file=ENV_FILE)
@@ -42,8 +42,9 @@ def _set_env_var_safe(key: str, value: str):
 
 def init_auth_tables():
     """Creates authentication and brute-force protection tables in SQLite if not present."""
-    global _auth_tables_initialized
-    if _auth_tables_initialized:
+    global _auth_tables_initialized_path
+    curr_path = db._resolve_db_path()
+    if _auth_tables_initialized_path == curr_path and os.path.exists(curr_path):
         return
     conn = db.get_connection()
     try:
@@ -76,7 +77,7 @@ def init_auth_tables():
                 ) VALUES (1, 0, 0, 0, 0)
                 """
             )
-        _auth_tables_initialized = True
+        _auth_tables_initialized_path = curr_path
     finally:
         conn.close()
     db._secure_db_file_permissions()

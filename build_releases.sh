@@ -31,7 +31,7 @@ import os, sys, zipfile
 
 target_zip = sys.argv[1]
 items = sys.argv[2:]
-exclude_names = {"__pycache__", ".DS_Store", ".env", ".env.local", "skippy.db", "skippy.db-journal", "skippy.db-wal", "resume.md", "resumes.json", "profile_alignment.json", "custom_prompt.txt", "custom_user_prompt.txt", "app_settings.json", "inbox.json", "test_venv", "venv", ".venv", ".git", "portfolio-site", "portfoliosite", "scratch", "tests"}
+exclude_names = {"__pycache__", ".DS_Store", ".env", ".env.local", "skippy.db", "skippy.db-journal", "skippy.db-wal", "resume.md", "resumes.json", "profile_alignment.json", "custom_prompt.txt", "custom_user_prompt.txt", "prompt_presets.json", "app_settings.json", "inbox.json", "test_venv", "venv", ".venv", ".git", ".agents", "portfolio-site", "portfoliosite", "scratch", "tests"}
 
 with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
     for item in items:
@@ -86,7 +86,7 @@ fi
 
 # 5. Core application files required for all target platforms
 # Includes all application logic (including auth.py, pipeline.py, posting_guard.py, career_compass.py, sample_data.py, sankey_utils.py), prompts, configuration templates, and pages.
-COMMON_FILES="app.py auth.py career_compass.py database.py evaluator.py pipeline.py posting_guard.py sample_data.py sankey_utils.py scraper.py utils.py webhook.py requirements.txt custom_prompt.template.txt prompt_presets.json README.md .env.example skippy_extension.zip pages/ .streamlit/"
+COMMON_FILES="app.py auth.py career_compass.py database.py evaluator.py pipeline.py posting_guard.py sample_data.py sankey_utils.py scraper.py utils.py webhook.py requirements.txt custom_prompt.template.txt prompt_presets.template.json README.md .env.example skippy_extension.zip pages/ .streamlit/"
 
 # 6. Pre-flight check: Verify all required core files exist
 echo "Verifying required application files..."
@@ -127,6 +127,7 @@ EXCLUDES=(
     -x "profile_alignment.json"
     -x "custom_prompt.txt"
     -x "custom_user_prompt.txt"
+    -x "prompt_presets.json"
     -x "app_settings.json"
     -x "*.docx"
     -x "*.pdf"
@@ -140,6 +141,7 @@ EXCLUDES=(
     -x "venv/*"
     -x ".venv/*"
     -x ".git/*"
+    -x ".agents/*"
     -x "tests/*"
     -x "scratch/*"
     -x "portfolio-site/*"

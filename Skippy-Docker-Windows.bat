@@ -66,7 +66,13 @@ if not exist "custom_user_prompt.txt" (
 )
 if not exist "profile_alignment.json" echo {} > "profile_alignment.json"
 if not exist "inbox.json" echo [] > "inbox.json"
-if not exist "prompt_presets.json" echo {} > "prompt_presets.json"
+if not exist "prompt_presets.json" (
+    if exist "prompt_presets.template.json" (
+        copy /y "prompt_presets.template.json" "prompt_presets.json" >nul
+    ) else (
+        echo {} > "prompt_presets.json"
+    )
+)
 if not exist "app_settings.json" echo {} > "app_settings.json"
 
 echo Building and starting the Skippy container...

@@ -6,7 +6,6 @@ import pandas as pd
 from collections import Counter, defaultdict
 import plotly.graph_objects as go
 import database as db
-from utils import setup_sidebar, enforce_onboarding
 from evaluator import generate_upskill_roadmap, generate_docx_from_markdown
 
 

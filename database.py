@@ -5,6 +5,9 @@ import re
 import time
 from datetime import datetime
 from functools import lru_cache
+from urllib.parse import urlparse, parse_qs
+
+_LINKEDIN_HOST_RE = re.compile(r"(^|\.)linkedin\.com$", re.I)
 
 DB_FILE = "skippy.db"
 DB_PATH = "skippy.db"
@@ -136,7 +139,7 @@ def set_env_var_safe(key: str, value: str, env_file: str = ".env") -> None:
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(_resolve_db_path(), timeout=30.0, check_same_thread=False)
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
     except sqlite3.OperationalError:
         pass
     return conn
@@ -145,6 +148,13 @@ def get_connection() -> sqlite3.Connection:
 def init_db():
     conn = get_connection()
     try:
+        try:
+            # WAL keeps recent writes in side files (-wal/-shm); inside Docker only skippy.db is
+            # bind-mounted, so compose sets SKIPPY_SQLITE_JOURNAL=DELETE to keep every write in that one file.
+            journal = os.environ.get("SKIPPY_SQLITE_JOURNAL", "WAL").strip().upper()
+            conn.execute(f"PRAGMA journal_mode={journal if journal in ('WAL', 'DELETE') else 'WAL'};")
+        except sqlite3.OperationalError:
+            pass
         c = conn.cursor()
         c.execute('''
             CREATE TABLE IF NOT EXISTS jobs (
@@ -302,8 +312,27 @@ SUMMARY_COLUMNS = (
     '"Disqualification Reason", "Score", "Technical Score", "Experience Score", '
     '"Behavioral Score", "Career Score", "Location Gate", "Eligibility Gate", '
     '"Summary", "Matching Skills", "Missing Skills", "Red Flags", '
-    '"Application Status", "Matched Resumes", "Status Updated", "Applied Date", "Source"'
+    '"Application Status", "Matched Resumes", "Status Updated", "Applied Date", "Source", '
+    'CASE WHEN ' + ' OR '.join(
+        f'COALESCE(TRIM("{c}"), \'\') != \'\''
+        for c in ("Tailored Resume", "Cover Letter", "Application QA", "Interview Prep",
+                  "Followup Note", "Outreach Message", "Company Intel", "Reviewer Audit")
+    ) + ' THEN 1 ELSE 0 END AS "_has_docs"'
 )
+
+def load_job_detail(url: str) -> dict:
+    """Loads the full row (documents and Job Text included) for a single job URL."""
+    conn = get_connection()
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute('SELECT * FROM jobs WHERE "URL" = ?', ((url or "").strip(),)).fetchone()
+        return {k: ("" if v is None else v) for k, v in dict(row).items()} if row else {}
+    except Exception as e:
+        print(f"[Database Error] Job detail load failed: {e}")
+        return {}
+    finally:
+        conn.close()
+
 
 def load_all_jobs(summary_only: bool = False):
     conn = get_connection()
@@ -335,10 +364,6 @@ def load_all_jobs(summary_only: bool = False):
     finally:
         conn.close()
     return records
-
-def load_jobs_summary():
-    """Loads lightweight job metadata without heavy text columns (resumes, cover letters, raw text)."""
-    return load_all_jobs(summary_only=True)
 
 
 def save_user_profile(profile_data: dict) -> bool:
@@ -576,19 +601,6 @@ def reset_onboarding_status() -> bool:
     return set_setting("onboarding_completed", "false")
 
 
-def load_job_urls() -> set:
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute('SELECT "URL" FROM jobs')
-        urls = {row[0] for row in cursor.fetchall()}
-    except Exception:
-        urls = set()
-    finally:
-        conn.close()
-    return urls
-
-
 def extract_linkedin_job_id(input_str: any) -> str | None:
     """Extracts numeric LinkedIn job ID from any URL, URN, or slug format."""
     if not input_str or not isinstance(input_str, str):
@@ -601,12 +613,24 @@ def extract_linkedin_job_id(input_str: any) -> str | None:
         return urn_match.group(1)
     if re.match(r"^\d{6,}$", trimmed):
         return trimmed
-    path_match = re.search(r"/jobs/view/(?:[^/]*-)?(\d{6,})/?", trimmed)
-    if path_match:
-        return path_match.group(1)
-    cid_match = re.search(r"[?&]currentJobId=(\d{6,})", trimmed)
-    if cid_match:
-        return cid_match.group(1)
+    has_scheme = bool(re.match(r"^https?://", trimmed, re.I))
+    if has_scheme or re.match(r"^[a-z0-9.-]+\.[a-z]{2,}(/|$)", trimmed, re.I):
+        try:
+            parsed = urlparse(trimmed if has_scheme else f"https://{trimmed}")
+        except Exception:
+            return None
+        hostname = parsed.hostname or ""
+        if not _LINKEDIN_HOST_RE.search(hostname):
+            return None
+        path_match = re.search(r"/jobs/view/(?:[^/]*-)?(\d{6,})/?$", parsed.path)
+        if path_match:
+            return path_match.group(1)
+        qs = parse_qs(parsed.query)
+        if "currentJobId" in qs and qs["currentJobId"]:
+            cid = qs["currentJobId"][0].strip()
+            if re.match(r"^\d{6,}$", cid):
+                return cid
+        return None
     slug_match = re.match(r"^[a-z0-9-]*-(\d{6,})$", trimmed, re.I)
     return slug_match.group(1) if slug_match else None
 
@@ -717,7 +741,6 @@ def record_seen_postings(postings: list[dict]) -> None:
         print(f"[Database Error] Failed to record seen postings: {e}")
     finally:
         conn.close()
-    _secure_db_file_permissions()
 
 
 def clear_seen_postings() -> None:
@@ -819,7 +842,6 @@ def save_scraper_results(postings: list[dict], source_label: str = "", clear_exi
         print(f"[Database Error] Failed to save scraper results: {e}")
     finally:
         conn.close()
-    _secure_db_file_permissions()
 
 
 def load_scraper_results() -> list[dict]:
@@ -971,7 +993,6 @@ def save_job_result(match_data):
         clear_repost_cache()
     finally:
         conn.close()
-    _secure_db_file_permissions()
 
 def update_job_field(url: str, field: str, value: str, max_retries: int = 3) -> bool:
     if field not in ALLOWED_UPDATE_FIELDS:
@@ -1005,10 +1026,18 @@ def update_job_field(url: str, field: str, value: str, max_retries: int = 3) -> 
                         alt_url = clean_url.rstrip("/") if clean_url.endswith("/") else clean_url + "/"
                         if field == "Application Status":
                             now_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-                            cur2 = conn.execute(
-                                'UPDATE jobs SET "Application Status" = ?, "Status Updated" = ? WHERE "URL" = ?',
-                                (value, now_ts, alt_url)
-                            )
+                            if value == "Applied":
+                                cur2 = conn.execute(
+                                    'UPDATE jobs SET "Application Status" = ?, "Status Updated" = ?, '
+                                    '"Applied Date" = CASE WHEN "Applied Date" IS NULL OR "Applied Date" = \'\' THEN ? ELSE "Applied Date" END '
+                                    'WHERE "URL" = ?',
+                                    (value, now_ts, now_ts, alt_url)
+                                )
+                            else:
+                                cur2 = conn.execute(
+                                    'UPDATE jobs SET "Application Status" = ?, "Status Updated" = ? WHERE "URL" = ?',
+                                    (value, now_ts, alt_url)
+                                )
                             if cur2.rowcount > 0:
                                 return True
                         else:
@@ -1029,12 +1058,12 @@ def update_job_field(url: str, field: str, value: str, max_retries: int = 3) -> 
     return False
 
 
-def _parse_timestamp_to_dt(ts_str: str) -> datetime | None:
+def parse_date_safely(ts_str: any) -> datetime | None:
     """Robustly parses timestamps across diverse ISO and human-readable formats."""
     if not ts_str or not isinstance(ts_str, str):
         return None
     s = ts_str.strip()
-    formats = [
+    for fmt in (
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
         "%Y-%m-%d",
@@ -1043,19 +1072,21 @@ def _parse_timestamp_to_dt(ts_str: str) -> datetime | None:
         "%m/%d/%Y",
         "%Y-%m-%dT%H:%M:%SZ",
         "%Y-%m-%dT%H:%M:%S",
-    ]
-    for fmt in formats:
+    ):
         try:
             return datetime.strptime(s, fmt)
         except ValueError:
             pass
-    iso_match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
-    if iso_match:
+    m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
+    if m:
         try:
-            return datetime(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         except ValueError:
             pass
     return None
+
+
+_parse_timestamp_to_dt = parse_date_safely
 
 
 _TITLE_STOPWORDS = frozenset({
@@ -1071,6 +1102,66 @@ def _extract_title_tokens(title: str) -> set[str]:
     clean = re.sub(r"[^\w\s-]", " ", (title or "").lower())
     words = set(re.findall(r"\b[a-z]{3,}\b", clean))
     return words - _TITLE_STOPWORDS
+
+
+@lru_cache(maxsize=1)
+def _load_company_posting_index() -> dict[str, list[dict]]:
+    """Loads all lightweight posting metadata once and indexes by lowercase company name."""
+    index: dict[str, list[dict]] = {}
+    conn = get_connection()
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute(
+            'SELECT "URL", "Position", "Company", "Timestamp", "Deadline", "Application Status" FROM jobs WHERE "Company" != \'\''
+        )
+        for r in cur.fetchall():
+            comp = (r["Company"] or "").strip()
+            if comp:
+                index.setdefault(comp.lower(), []).append({
+                    "source_table": "jobs",
+                    "url": r["URL"] or "",
+                    "title": r["Position"] or "",
+                    "company": comp,
+                    "date_str": (r["Timestamp"] or "") or (r["Deadline"] or ""),
+                    "status": r["Application Status"] or "",
+                })
+
+        cur.execute(
+            'SELECT "url", "title", "company", "date", "scraped_at" FROM scraper_results WHERE "company" != \'\''
+        )
+        for r in cur.fetchall():
+            comp = (r["company"] or "").strip()
+            if comp:
+                index.setdefault(comp.lower(), []).append({
+                    "source_table": "scraper_results",
+                    "url": r["url"] or "",
+                    "title": r["title"] or "",
+                    "company": comp,
+                    "date_str": (r["date"] or "") or (r["scraped_at"] or ""),
+                    "status": "Scraped",
+                })
+
+        cur.execute(
+            'SELECT "url", "title", "company", "date", "seen_at" FROM seen_postings WHERE "company" != \'\''
+        )
+        for r in cur.fetchall():
+            comp = (r["company"] or "").strip()
+            if comp:
+                index.setdefault(comp.lower(), []).append({
+                    "source_table": "seen_postings",
+                    "url": r["url"] or "",
+                    "title": r["title"] or "",
+                    "company": comp,
+                    "date_str": (r["date"] or "") or (r["seen_at"] or ""),
+                    "status": "Discovered",
+                })
+    except Exception as e:
+        print(f"[Database Error] _load_company_posting_index query failed: {e}")
+    finally:
+        conn.close()
+    return index
 
 
 def detect_job_reposts(
@@ -1096,67 +1187,7 @@ def detect_job_reposts(
     normalized_curr_url = normalize_job_url(current_url)
     curr_li_id = extract_linkedin_job_id(current_url)
 
-    candidates = []
-    conn = get_connection()
-    try:
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-
-        # 1. Search in jobs (evaluated postings)
-        cur.execute(
-            'SELECT "URL", "Position", "Company", "Timestamp", "Deadline", "Application Status" '
-            'FROM jobs WHERE LOWER("Company") = LOWER(?)',
-            (company_clean,)
-        )
-        for r in cur.fetchall():
-            row = dict(r)
-            candidates.append({
-                "source_table": "jobs",
-                "url": row.get("URL", ""),
-                "title": row.get("Position", ""),
-                "company": row.get("Company", ""),
-                "date_str": row.get("Timestamp", "") or row.get("Deadline", ""),
-                "status": row.get("Application Status", ""),
-            })
-
-        # 2. Search in scraper_results
-        cur.execute(
-            'SELECT "url", "title", "company", "date", "scraped_at" '
-            'FROM scraper_results WHERE LOWER("company") = LOWER(?)',
-            (company_clean,)
-        )
-        for r in cur.fetchall():
-            row = dict(r)
-            candidates.append({
-                "source_table": "scraper_results",
-                "url": row.get("url", ""),
-                "title": row.get("title", ""),
-                "company": row.get("company", ""),
-                "date_str": row.get("date", "") or row.get("scraped_at", ""),
-                "status": "Scraped",
-            })
-
-        # 3. Search in seen_postings
-        cur.execute(
-            'SELECT "url", "title", "company", "date", "seen_at" '
-            'FROM seen_postings WHERE LOWER("company") = LOWER(?)',
-            (company_clean,)
-        )
-        for r in cur.fetchall():
-            row = dict(r)
-            candidates.append({
-                "source_table": "seen_postings",
-                "url": row.get("url", ""),
-                "title": row.get("title", ""),
-                "company": row.get("company", ""),
-                "date_str": row.get("date", "") or row.get("seen_at", ""),
-                "status": "Discovered",
-            })
-    except Exception as e:
-        print(f"[Database Error] detect_job_reposts query failed: {e}")
-        return []
-    finally:
-        conn.close()
+    candidates = _load_company_posting_index().get(company_clean.lower(), [])
 
     by_posting_key: dict[str, dict] = {}
 
@@ -1233,6 +1264,7 @@ def detect_job_reposts(
 
 def clear_repost_cache():
     try:
+        _load_company_posting_index.cache_clear()
         check_repost_risk.cache_clear()
     except Exception:
         pass
@@ -1261,13 +1293,13 @@ def check_repost_risk(company: str, role: str, current_url: str = "", window_day
     }
 
 
-def get_pipeline_turnaround_metrics() -> dict:
+def get_pipeline_turnaround_metrics(stale_days: int = 14) -> dict:
     """
     Computes turnaround latencies and employer responsiveness metrics across evaluated jobs:
     - Average days to interview invite
     - Average days to rejection
     - Fast responders (< 7 days)
-    - Stale / Ghosted applications (> 14 days with no response)
+    - Stale / Ghosted applications (> stale_days with no response)
     """
     all_jobs = load_all_jobs(summary_only=True)
     interview_latencies = []
@@ -1276,25 +1308,27 @@ def get_pipeline_turnaround_metrics() -> dict:
     now = datetime.now()
 
     for j in all_jobs:
-        status = j.get("Application Status", "")
+        status = (j.get("Application Status") or "").strip()
+        status_lower = status.lower()
         applied_str = j.get("Applied Date", "")
         status_up_str = j.get("Status Updated", "") or j.get("Timestamp", "")
 
         app_dt = _parse_timestamp_to_dt(applied_str)
-        if not app_dt and status in ("Applied", "Interviewing", "Offer", "Rejected"):
-            app_dt = _parse_timestamp_to_dt(j.get("Timestamp", ""))
+        if not app_dt and any(k in status_lower for k in ("applied", "interview", "offer", "waitlist", "reject")):
+            if status_lower != "not applied":
+                app_dt = _parse_timestamp_to_dt(j.get("Timestamp", ""))
 
         if app_dt:
             up_dt = _parse_timestamp_to_dt(status_up_str) or now
             delta_days = max(0, (up_dt - app_dt).days)
 
-            if status == "Interviewing":
-                interview_latencies.append(delta_days)
-            elif status == "Rejected":
+            if "reject" in status_lower:
                 rejection_latencies.append(delta_days)
+            elif any(k in status_lower for k in ("interview", "offer", "waitlist")):
+                interview_latencies.append(delta_days)
             elif status == "Applied":
                 wait_days = (now - app_dt).days
-                if wait_days >= 14:
+                if wait_days >= stale_days:
                     ghosted_count += 1
 
     avg_interview = sum(interview_latencies) / len(interview_latencies) if interview_latencies else 0.0
@@ -1317,5 +1351,170 @@ def clear_all_history():
         clear_repost_cache()
     finally:
         conn.close()
+
+
+DOC_COLUMNS = (
+    "Tailored Resume",
+    "Cover Letter",
+    "Application QA",
+    "Interview Prep",
+    "Followup Note",
+    "Outreach Message",
+    "Company Intel",
+    "Reviewer Audit",
+)
+PROTECTED_STATUSES = frozenset({"Applied", "Interviewing", "Waitlisted", "Offer"})
+
+
+def job_has_saved_documents(job: dict) -> bool:
+    """Returns True if the job has any generated document content."""
+    if job.get("_has_docs"):
+        return True
+    for col in DOC_COLUMNS:
+        val = job.get(col)
+        if val and str(val).strip() and str(val).strip().lower() != "nan":
+            return True
+    return False
+
+
+def job_has_saved_work(job: dict) -> bool:
+    """Returns True if the job has an active application status or any generated documents."""
+    if (job.get("Application Status") or "").strip() in PROTECTED_STATUSES:
+        return True
+    return job_has_saved_documents(job)
+
+
+def delete_jobs_by_urls(urls: list[str], keep_seen: bool = True) -> int:
+    """
+    Deletes specified job URLs from `jobs` (with trailing-slash resilience).
+    When keep_seen=True, records deleted postings in `seen_postings` and sets their
+    `scraper_results` status to 'seen' so future searches skip them.
+    """
+    candidate_urls = set()
+    for u in urls or []:
+        clean = (u or "").strip()
+        if clean:
+            candidate_urls.add(clean)
+            candidate_urls.add(clean.rstrip("/") if clean.endswith("/") else clean + "/")
+    if not candidate_urls:
+        return 0
+
+    placeholders = ",".join("?" for _ in candidate_urls)
+    params = tuple(candidate_urls)
+    conn = get_connection()
+    matched_rows = []
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            f'SELECT "URL", "Position", "Company", "Timestamp", "Source" FROM jobs WHERE "URL" IN ({placeholders})',
+            params,
+        )
+        matched_rows = [dict(r) for r in cur.fetchall()]
+        if not matched_rows:
+            return 0
+
+        exact_urls = [r["URL"] for r in matched_rows if r.get("URL")]
+        del_placeholders = ",".join("?" for _ in exact_urls)
+        target_scraper_status = "seen" if keep_seen else "new"
+
+        with conn:
+            conn.execute(f'DELETE FROM jobs WHERE "URL" IN ({del_placeholders})', tuple(exact_urls))
+            for u in exact_urls:
+                lid = extract_linkedin_job_id(u)
+                norm_u = normalize_job_url(u)
+                conn.execute(
+                    'UPDATE scraper_results SET "status" = ? WHERE "url" = ? OR "id" = ? OR "id" = ?',
+                    (target_scraper_status, u, lid or "", norm_u or ""),
+                )
+        clear_repost_cache()
+    finally:
+        conn.close()
+
+    if keep_seen and matched_rows:
+        seen_batch = [
+            {
+                "url": r["URL"],
+                "title": r.get("Position") or "",
+                "company": r.get("Company") or "",
+                "date": r.get("Timestamp") or "",
+                "source": r.get("Source") or "",
+            }
+            for r in matched_rows
+            if r.get("URL") and not str(r["URL"]).startswith("Manual_Paste_")
+        ]
+        if seen_batch:
+            record_seen_postings(seen_batch)
+
+    return len(matched_rows)
+
+
+def delete_job_by_url(url: str, keep_seen: bool = True) -> bool:
+    """Deletes a single evaluated job by URL."""
+    return delete_jobs_by_urls([url], keep_seen=keep_seen) > 0
+
+
+def preview_bulk_delete(
+    jobs: list[dict],
+    *,
+    mode: str = "low_score",
+    max_score: int = 60,
+    include_disqualified: bool = True,
+    statuses: list[str] | None = None,
+    protect_active_and_docs: bool = True,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Partitions `jobs` matching a bulk-cleanup rule into `(to_delete, protected)`.
+    """
+    status_set = set(statuses or [])
+    to_delete = []
+    protected = []
+    for j in jobs or []:
+        eligible = bool(j.get("Eligible", True))
+        score = int(j.get("Score", 0) or 0)
+        curr_status = (j.get("Application Status") or "Not Applied").strip()
+
+        if mode == "low_score":
+            matches = (score < max_score) or (include_disqualified and not eligible)
+        elif mode == "disqualified":
+            matches = not eligible
+        elif mode == "status":
+            matches = curr_status in status_set
+        else:
+            matches = False
+
+        if not matches:
+            continue
+
+        if protect_active_and_docs and job_has_saved_work(j):
+            protected.append(j)
+        else:
+            to_delete.append(j)
+
+    return to_delete, protected
+
+
+def delete_jobs_bulk(
+    *,
+    mode: str = "low_score",
+    max_score: int = 60,
+    include_disqualified: bool = True,
+    statuses: list[str] | None = None,
+    protect_active_and_docs: bool = True,
+    keep_seen: bool = True,
+) -> int:
+    """Deletes evaluated jobs matching the specified bulk cleanup criteria."""
+    all_jobs = load_all_jobs(summary_only=True)
+    to_delete, _ = preview_bulk_delete(
+        all_jobs,
+        mode=mode,
+        max_score=max_score,
+        include_disqualified=include_disqualified,
+        statuses=statuses,
+        protect_active_and_docs=protect_active_and_docs,
+    )
+    urls = [j["URL"] for j in to_delete if j.get("URL")]
+    return delete_jobs_by_urls(urls, keep_seen=keep_seen)
+
 
 init_db()

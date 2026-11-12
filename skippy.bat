@@ -5,7 +5,7 @@ color 0A
 cd /d "%~dp0"
 
 :: FAST BOOT: Skip setup if the environment is already built
-IF EXIST "python_runtime\Scripts\streamlit.exe" GOTO LaunchApp
+IF EXIST "python_runtime\.setup_complete" GOTO LaunchApp
 
 echo =======================================================
 echo          Skippy - Windows One-Click Installer
@@ -75,6 +75,7 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo Setup complete! Launching Skippy...
+type nul > "python_runtime\.setup_complete"
 timeout /t 1 >nul
 GOTO LaunchApp
 
@@ -96,6 +97,11 @@ if not exist "custom_prompt.txt" (
 if not exist "custom_user_prompt.txt" (
     if exist "custom_prompt.template.txt" (
         copy /y "custom_prompt.template.txt" "custom_user_prompt.txt" >nul
+    )
+)
+if not exist "prompt_presets.json" (
+    if exist "prompt_presets.template.json" (
+        copy /y "prompt_presets.template.json" "prompt_presets.json" >nul
     )
 )
 

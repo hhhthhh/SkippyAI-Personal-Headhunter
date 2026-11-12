@@ -10,7 +10,7 @@ from collections import defaultdict
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from utils import setup_sidebar, enforce_onboarding, load_resumes, combine_selected_resumes
+from utils import load_resumes, combine_selected_resumes
 import database as db
 from evaluator import (
     tailor_resume,
@@ -54,12 +54,112 @@ if "latest_batch_info" in st.session_state:
             del st.session_state["latest_batch_info"]
             st.rerun()
 
+def _clear_deleted_job_state(urls: list[str]) -> None:
+    """Cleans up session_state references for deleted job URLs."""
+    url_set = set(urls or [])
+    if st.session_state.get("active_job_url") in url_set:
+        st.session_state.pop("active_job_url", None)
+    for u in url_set:
+        for col in db.DOC_COLUMNS:
+            st.session_state.pop(f"{col}_{u}", None)
+
+
+all_saved_jobs = db.load_all_jobs(summary_only=True)
+if "resumes_vault" not in st.session_state:
+    st.session_state["resumes_vault"] = load_resumes()
+
 # Data Management tools tucked neatly at the top
-col_act1, col_act2, _ = st.columns([1.5, 1.8, 6.7])
+col_act1, col_act2, col_act3, _ = st.columns([1.5, 2.1, 1.8, 4.6])
 with col_act1:
     if st.button("🔄 Refresh Data", type="secondary", width="stretch"):
         st.rerun()
 with col_act2:
+    with st.popover("🧹 Clean Up Postings", width="stretch"):
+        st.markdown("**Bulk Prune Unwanted Postings**")
+        st.caption("Remove low-scoring or unwanted listings while keeping them marked as **Seen** so future searches skip them.")
+        cleanup_mode_label = st.radio(
+            "Cleanup Rule:",
+            [
+                "📉 Low Score & Disqualified",
+                "❌ Disqualified Postings Only",
+                "🗂️ By Application Status",
+            ],
+            key="history_bulk_cleanup_mode",
+        )
+        max_score_cutoff = 60
+        include_disq = True
+        chosen_statuses = []
+
+        if cleanup_mode_label == "📉 Low Score & Disqualified":
+            max_score_cutoff = st.slider(
+                "Delete postings with Score below:",
+                min_value=10,
+                max_value=90,
+                value=60,
+                step=5,
+                key="history_bulk_max_score",
+            )
+            include_disq = st.checkbox(
+                "Also include Disqualified postings",
+                value=True,
+                key="history_bulk_include_disq",
+            )
+            mode_key = "low_score"
+        elif cleanup_mode_label == "❌ Disqualified Postings Only":
+            mode_key = "disqualified"
+        else:
+            mode_key = "status"
+            chosen_statuses = st.multiselect(
+                "Select Application Statuses to Remove:",
+                options=[
+                    "Not Applied",
+                    "Archived",
+                    "Ghosted / Stale",
+                    "Rejected (Application)",
+                    "Rejected (Interview)",
+                ],
+                default=["Archived", "Rejected (Application)", "Rejected (Interview)"],
+                key="history_bulk_statuses",
+            )
+
+        protect_saved = st.checkbox(
+            "🛡️ Protect active applications (Applied, Interviewing, Offer) & postings with saved documents",
+            value=True,
+            key="history_bulk_protect_saved",
+        )
+
+        to_del, protected_list = db.preview_bulk_delete(
+            all_saved_jobs,
+            mode=mode_key,
+            max_score=max_score_cutoff,
+            include_disqualified=include_disq,
+            statuses=chosen_statuses,
+            protect_active_and_docs=protect_saved,
+        )
+        del_count = len(to_del)
+        prot_count = len(protected_list)
+
+        if del_count > 0:
+            prot_note = f" ({prot_count} protected)" if prot_count > 0 else ""
+            st.info(f"Matches **{del_count}** posting(s) to remove{prot_note}.")
+        elif prot_count > 0:
+            st.caption(f"0 postings to delete ({prot_count} matching posting(s) are protected by the safety guardrail).")
+        else:
+            st.caption("No postings currently match this rule.")
+
+        if st.button(
+            f"🗑️ Delete {del_count} Matching Posting{'s' if del_count != 1 else ''}",
+            type="primary",
+            disabled=(del_count == 0),
+            key="btn_confirm_bulk_cleanup",
+            width="stretch",
+        ):
+            target_urls = [j["URL"] for j in to_del if j.get("URL")]
+            removed = db.delete_jobs_by_urls(target_urls, keep_seen=True)
+            _clear_deleted_job_state(target_urls)
+            st.toast(f"🧹 Removed {removed} posting(s) (kept marked as Seen).")
+            st.rerun()
+with col_act3:
     with st.popover("🗑️ Clear History", width="stretch"):
         st.warning("⚠️ **Warning:** This will permanently delete all evaluated postings, generated documents, and audit reports.")
         if st.button("Confirm Delete All History", type="primary", key="btn_confirm_clear_all_history", width="stretch"):
@@ -67,9 +167,6 @@ with col_act2:
             st.session_state.pop("active_job_url", None)
             st.rerun()
 
-all_saved_jobs = db.load_all_jobs()
-if "resumes_vault" not in st.session_state:
-    st.session_state["resumes_vault"] = load_resumes()
 if not all_saved_jobs:
     with st.container(border=True):
         st.subheader("🗂️ No Jobs Reviewed Yet")
@@ -104,15 +201,8 @@ def format_deadline_badge(deadline_str: str) -> str:
 
 def parse_job_date(timestamp_str: str) -> date | None:
     """Parses a date object from a job timestamp string (e.g. 'YYYY-MM-DD HH:MM' or ISO)."""
-    if not timestamp_str or not isinstance(timestamp_str, str):
-        return None
-    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", timestamp_str.strip())
-    if m:
-        try:
-            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        except ValueError:
-            return None
-    return None
+    dt = db.parse_date_safely(timestamp_str)
+    return dt.date() if dt else None
 
 
 def format_day_group_label(job_date: date | None, today: date) -> str:
@@ -235,6 +325,10 @@ selection_event = st.dataframe(
 
 # Identify which job the user clicked in the dataframe
 active_job_id = int(df.iloc[selection_event.selection.rows[0]]["Original_Index"]) if (selection_event.selection.rows and selection_event.selection.rows[0] < len(df)) else None
+if active_job_id != st.session_state.get("_hist_last_row"):
+    st.session_state["_hist_last_row"] = active_job_id
+    if active_job_id is not None:
+        st.session_state["_hist_jump_nonce"] = st.session_state.get("_hist_jump_nonce", 0) + 1
 if active_job_id is not None and 0 <= active_job_id < len(all_saved_jobs):
     st.session_state["active_job_url"] = all_saved_jobs[active_job_id].get("URL")
 
@@ -322,9 +416,9 @@ def document_generator(item: dict, doc_type: str, generator_func):
         if supports_reviewer:
             use_reviewer = st.checkbox(
                 "🛡️ Run Accuracy & Fact Check (Prevents Made-Up Info & Checks Keywords)",
-                value=True,
+                value=False,
                 key=f"chk_rev_{cache_key}",
-                help="Runs a second review pass comparing the draft against your real resume and the job description to eliminate made-up details, strip clichés, and verify key skill terms."
+                help="Optional (adds ~10-15s): runs a second review pass comparing the draft against your real resume and the job description to eliminate made-up details, strip clichés, and verify key skill terms."
             )
         elif doc_type == "Interview Prep":
             interview_stage = st.selectbox(
@@ -371,6 +465,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
                             cover_letter=str(item.get("Cover Letter") or ""),
                             interview_stage=interview_stage,
                             model_override=st.session_state.get("model_override", ""),
+                            skip_guard=True,
                         )
                     elif doc_type == "Application QA":
                         content = generator_func(
@@ -381,6 +476,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
                             st.session_state.get("local_base_url"),
                             st.session_state.get("local_model_name"),
                             model_override=st.session_state.get("model_override", ""),
+                            skip_guard=True,
                         )
                     elif doc_type == "Followup Note":
                         content = generator_func(
@@ -396,6 +492,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
                             local_base_url=st.session_state.get("local_base_url"),
                             local_model_name=st.session_state.get("local_model_name"),
                             model_override=st.session_state.get("model_override", ""),
+                            skip_guard=True,
                         )
                     elif doc_type == "Outreach Message":
                         content = generator_func(
@@ -409,6 +506,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
                             local_model_name=st.session_state.get("local_model_name"),
                             tailored_resume=str(item.get("Tailored Resume") or ""),
                             model_override=st.session_state.get("model_override", ""),
+                            skip_guard=True,
                         )
                     elif doc_type == "Company Intel":
                         content = generator_func(
@@ -421,12 +519,14 @@ def document_generator(item: dict, doc_type: str, generator_func):
                             local_base_url=st.session_state.get("local_base_url"),
                             local_model_name=st.session_state.get("local_model_name"),
                             model_override=st.session_state.get("model_override", ""),
+                            skip_guard=True,
                         )
                     else:
                         content = generator_func(
                             active_resume_for_gen, job_text, st.session_state.get("model_choice"),
                             st.session_state.get("user_api_key"), st.session_state.get("local_base_url"), st.session_state.get("local_model_name"),
                             model_override=st.session_state.get("model_override", ""),
+                            skip_guard=True,
                         )
                 except Exception as gen_err:
                     st.error(f"⚠️ Could not generate {doc_type}: {gen_err}")
@@ -443,6 +543,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
                             local_base_url=st.session_state.get("local_base_url", ""),
                             local_model_name=st.session_state.get("local_model_name", ""),
                             model_override=st.session_state.get("model_override", ""),
+                            skip_guard=True,
                         )
                         if audit_res.revised_document and len(audit_res.revised_document.strip()) > 50:
                             content = audit_res.revised_document
@@ -560,7 +661,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
                 with col1:
                     st.download_button(
                         "📥 Download ATS (.docx)",
-                        data=generate_ats_resume_docx(edited_doc, template_style=ats_style_key),
+                        data=lambda: generate_ats_resume_docx(edited_doc, template_style=ats_style_key),
                         file_name=f"ATS_Resume_{safe_title}.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         type="primary",
@@ -569,20 +670,32 @@ def document_generator(item: dict, doc_type: str, generator_func):
                     )
                 if col_pdf is not None and has_pdf:
                     with col_pdf:
-                        st.download_button(
-                            "📕 Download ATS (.pdf)",
-                            data=lambda: generate_ats_resume_pdf(edited_doc, template_style=ats_style_key),
-                            file_name=f"ATS_Resume_{safe_title}.pdf",
-                            mime="application/pdf",
-                            width="stretch",
-                            key=f"dl_pdf_{cache_key}",
-                        )
+                        pdf_src = (edited_doc, ats_style_key)
+                        pdf_state = f"pdf_bytes_{cache_key}"
+                        cached_pdf = st.session_state.get(pdf_state)
+                        if not (cached_pdf and cached_pdf[0] == pdf_src) and st.button("📕 Prepare ATS PDF", width="stretch", key=f"prep_pdf_{cache_key}"):
+                            with st.spinner("Converting to PDF (first run can take ~20s)..."):
+                                built = generate_ats_resume_pdf(*pdf_src)
+                            if built:
+                                st.session_state[pdf_state] = (pdf_src, built)
+                            else:
+                                st.warning("PDF conversion failed. Download the .docx instead, or try again.")
+                        cached_pdf = st.session_state.get(pdf_state)
+                        if cached_pdf and cached_pdf[0] == pdf_src:
+                            st.download_button(
+                                "📕 Download ATS (.pdf)",
+                                data=cached_pdf[1],
+                                file_name=f"ATS_Resume_{safe_title}.pdf",
+                                mime="application/pdf",
+                                width="stretch",
+                                key=f"dl_pdf_{cache_key}",
+                            )
             else:
                 col1, col2, col3 = st.columns([2.5, 3.2, 1.5])
                 with col1:
                     st.download_button(
                         "📥 Download (.docx)",
-                        data=generate_docx_from_markdown(edited_doc),
+                        data=lambda: generate_docx_from_markdown(edited_doc),
                         file_name=f"{safe_doc_type}_{safe_title}.docx",
                         type="primary",
                         width="stretch",
@@ -603,6 +716,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
                                 local_base_url=st.session_state.get("local_base_url", ""),
                                 local_model_name=st.session_state.get("local_model_name", ""),
                                 model_override=st.session_state.get("model_override", ""),
+                                skip_guard=True,
                             )
                             if audit_res.revised_document and len(audit_res.revised_document.strip()) > 50:
                                 st.session_state[cache_key] = audit_res.revised_document
@@ -632,7 +746,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
             with col1:
                 st.download_button(
                     "📥 Download (.docx)",
-                    data=generate_docx_from_markdown(edited_doc),
+                    data=lambda: generate_docx_from_markdown(edited_doc),
                     file_name=f"{safe_doc_type}_{safe_title}.docx",
                     type="primary",
                     key=f"dl_{cache_key}"
@@ -669,7 +783,21 @@ def render_history_card(item: dict, is_expanded: bool = False):
     card_hash = hashlib.sha256((item.get("URL") or item.get("Position", "")).encode("utf-8", errors="ignore")).hexdigest()[:12]
     if is_expanded:
         st.html("<div id='active_job_card' style='scroll-margin-top: 80px;'></div>")
-    with st.expander(f"{fit_band} ({score}/100) — {item.get('Position', 'Role')}{company_suffix}{deadline_header} ({item.get('URL', 'Link')})", expanded=is_expanded):
+    exp_key = f"hist_exp_{card_hash}"
+    # Force the card open once per jump/row-click, but let the user collapse it afterwards
+    open_token = (st.session_state.get("active_job_url"), st.session_state.get("_hist_jump_nonce", 0))
+    if is_expanded and st.session_state.get("_hist_forced_token") != open_token:
+        st.session_state[exp_key] = True
+        st.session_state["_hist_forced_token"] = open_token
+    card = st.expander(
+        f"{fit_band} ({score}/100) — {item.get('Position', 'Role')}{company_suffix}{deadline_header} ({item.get('URL', 'Link')})",
+        expanded=is_expanded, key=exp_key, on_change="rerun",
+    )
+    if not card.open:
+        return
+    # Heavy columns (documents, Job Text) are fetched only for cards the user opens
+    item = {**item, **db.load_job_detail(item.get("URL"))}
+    with card:
         tabs = st.tabs([
             "Overview",
             "⚡ Tailored Resume",
@@ -679,14 +807,30 @@ def render_history_card(item: dict, is_expanded: bool = False):
             "📬 Follow-Up Notes",
             "🎯 Networking Messages",
             "🏢 Company Research Guide",
-        ], key=f"hist_tabs_{card_hash}")
+        ], key=f"hist_tabs_{card_hash}", on_change="rerun")
         with tabs[0]:
-            c1, c2, _ = st.columns([1.2, 2.0, 6.8])
+            c1, c2, _, c_del = st.columns([1.4, 2.2, 5.0, 1.4])
             raw_url = str(item.get("URL") or "")
             if raw_url.startswith(("http://", "https://")):
                 c1.link_button("🚀 Apply to this Job", raw_url, type="primary")
             with c2:
                 application_status_tracker(item)
+            with c_del:
+                pos_title = item.get("Position") or "Role"
+                if db.job_has_saved_work(item):
+                    with st.popover("🗑️ Delete", width="stretch"):
+                        st.warning("This posting has saved documents or an active application status.")
+                        if st.button("Confirm Delete", type="primary", key=f"confirm_del_card_{card_hash}", width="stretch"):
+                            db.delete_job_by_url(raw_url, keep_seen=True)
+                            _clear_deleted_job_state([raw_url])
+                            st.toast(f"🗑️ Removed '{pos_title}' (marked as Seen).")
+                            st.rerun()
+                else:
+                    if st.button("🗑️ Delete", key=f"del_card_{card_hash}", width="stretch", help="Delete this posting from History (keeps it marked as Seen so future scrapes skip it)"):
+                        db.delete_job_by_url(raw_url, keep_seen=True)
+                        _clear_deleted_job_state([raw_url])
+                        st.toast(f"🗑️ Removed '{pos_title}' (marked as Seen).")
+                        st.rerun()
 
             risk = db.check_repost_risk(item.get("Company", ""), item.get("Position", ""), item.get("URL", ""))
             if risk:
@@ -775,24 +919,31 @@ def render_history_card(item: dict, is_expanded: bool = False):
                             st.markdown(f"- ⚠️ {gap.strip()}")
                             
         with tabs[1]:
-            document_generator(item, "Tailored Resume", tailor_resume)
+            if tabs[1].open:
+                document_generator(item, "Tailored Resume", tailor_resume)
         with tabs[2]:
-            document_generator(item, "Cover Letter", tailor_cover_letter)
+            if tabs[2].open:
+                document_generator(item, "Cover Letter", tailor_cover_letter)
         with tabs[3]:
-            st.caption("Generates quick, character-counted answers for online job applications (short pitches, introductions, and 'Why this company' answers).")
-            document_generator(item, "Application QA", generate_application_qa)
+            if tabs[3].open:
+                st.caption("Generates quick, character-counted answers for online job applications (short pitches, introductions, and 'Why this company' answers).")
+                document_generator(item, "Application QA", generate_application_qa)
         with tabs[4]:
-            st.caption("Generates interview practice questions, realistic story examples (STAR method), ways to address missing skills, and smart questions to ask the interviewer.")
-            document_generator(item, "Interview Prep", generate_interview_prep)
+            if tabs[4].open:
+                st.caption("Generates interview practice questions, realistic story examples (STAR method), ways to address missing skills, and smart questions to ask the interviewer.")
+                document_generator(item, "Interview Prep", generate_interview_prep)
         with tabs[5]:
-            st.caption("Drafts concise follow-up and thank-you notes for email and LinkedIn (60–120 words).")
-            document_generator(item, "Followup Note", generate_followup_note)
+            if tabs[5].open:
+                st.caption("Drafts concise follow-up and thank-you notes for email and LinkedIn (60–120 words).")
+                document_generator(item, "Followup Note", generate_followup_note)
         with tabs[6]:
-            st.caption("Generates personalized LinkedIn connection notes (under 300 characters) for hiring managers, recruiters, and peers, plus a direct email draft.")
-            document_generator(item, "Outreach Message", generate_outreach_messages)
+            if tabs[6].open:
+                st.caption("Generates personalized LinkedIn connection notes (under 300 characters) for hiring managers, recruiters, and peers, plus a direct email draft.")
+                document_generator(item, "Outreach Message", generate_outreach_messages)
         with tabs[7]:
-            st.caption("Creates a complete company overview covering what they do, tools they use, recent news, key challenges, team culture, and winning interview talking points.")
-            document_generator(item, "Company Intel", generate_deep_company_brief)
+            if tabs[7].open:
+                st.caption("Creates a complete company overview covering what they do, tools they use, recent news, key challenges, team culture, and winning interview talking points.")
+                document_generator(item, "Company Intel", generate_deep_company_brief)
 
 
 # Helper to safely determine the job source without crashing on old Pandas NaN data

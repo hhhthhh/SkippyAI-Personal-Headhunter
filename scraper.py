@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, Page
 
 from posting_guard import guard as run_posting_guard
-from database import normalize_job_url
+from database import normalize_job_url, extract_linkedin_job_id as normalize_linkedin_job_id
 
 LINKEDIN_SEARCH_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 LINKEDIN_DETAIL_URL = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting"
@@ -123,48 +123,6 @@ def is_safe_url(url: str, allow_unresolved: bool = True) -> bool:
         return True
     except Exception:
         return False
-
-
-def normalize_linkedin_job_id(input_str: str) -> Optional[str]:
-    """
-    Accepts a raw LinkedIn job ID, a job URN, a LinkedIn job-view or search URL
-    (e.g. linkedin.com/jobs/view/... or ?currentJobId=...), or a slug ending in the ID.
-    Rejects URLs from any non-LinkedIn host so numeric IDs on other job boards are never misrouted.
-    """
-    if not input_str or not isinstance(input_str, str):
-        return None
-    trimmed = input_str.strip()
-    if not trimmed:
-        return None
-
-    urn_match = re.search(r"urn:li:jobPosting:(\d{6,})", trimmed)
-    if urn_match:
-        return urn_match.group(1)
-
-    if re.match(r"^\d{6,}$", trimmed):
-        return trimmed
-
-    has_scheme = bool(re.match(r"^https?://", trimmed, re.I))
-    if has_scheme or re.match(r"^[a-z0-9.-]+\.[a-z]{2,}(/|$)", trimmed, re.I):
-        try:
-            parsed = urlparse(trimmed if has_scheme else f"https://{trimmed}")
-        except Exception:
-            return None
-        hostname = parsed.hostname or ""
-        if not LINKEDIN_HOST_RE.search(hostname):
-            return None
-        path_match = re.search(r"/jobs/view/(?:[^/]*-)?(\d{6,})/?$", parsed.path)
-        if path_match:
-            return path_match.group(1)
-        qs = parse_qs(parsed.query)
-        if "currentJobId" in qs and qs["currentJobId"]:
-            cid = qs["currentJobId"][0].strip()
-            if re.match(r"^\d{6,}$", cid):
-                return cid
-        return None
-
-    slug_match = re.match(r"^[a-z0-9-]*-(\d{6,})$", trimmed, re.I)
-    return slug_match.group(1) if slug_match else None
 
 
 def _linkedin_guest_fetch(url: str, max_retries: int = 4) -> str:
@@ -755,12 +713,6 @@ def scrape_job_with_guard(url: str, page: Page = None) -> Tuple[str, List[str]]:
         return f"Error scraping URL via temporary browser: {str(e)}", []
 
 
-def scrape_job_text(url: str, page: Page = None) -> str:
-    """Robust scraper using requests with a Playwright fallback. Enforces SSRF, scheme validation, and Posting Guard."""
-    cleaned_text, _ = scrape_job_with_guard(url, page=page)
-    return cleaned_text
-
-
 def _log_scraper_error(message: str):
     """Outputs an error cleanly to Streamlit UI if in a request context, otherwise prints."""
     try:
@@ -787,6 +739,11 @@ def scrape_universal_search_results(search_url: str) -> list[str]:
             
             # Tell Playwright not to wait for background analytics/ads
             page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+            current_url = getattr(page, "url", None)
+            if isinstance(current_url, str) and current_url and not is_safe_url(current_url):
+                browser.close()
+                _log_scraper_error(f"Disallowed redirect target: {current_url}")
+                return []
             
             # Wait specifically for links to appear
             page.wait_for_selector("a", timeout=10000)
@@ -893,9 +850,10 @@ def fetch_greenhouse_board(
 
         html_content = html.unescape(item.get("content", ""))
         clean_text = ""
+        sec_flags = []
         if html_content:
-            soup = BeautifulSoup(html_content, "html.parser")
-            clean_text = soup.get_text(separator="\n").strip()
+            clean_text, guard_findings = run_posting_guard(html_content, mode="html")
+            sec_flags = list(guard_findings.get("security_flags") or [])
 
         results.append({
             "id": f"gh_{item.get('id')}",
@@ -906,6 +864,8 @@ def fetch_greenhouse_board(
             "url": job_url,
             "date": item.get("updated_at", "")[:10] if item.get("updated_at") else "",
             "description": clean_text,
+            "raw_text": clean_text,
+            "security_flags": sec_flags,
             "source": f"Greenhouse ({clean_token})",
             "is_evaluated": is_eval,
             "is_seen": is_seen,
@@ -963,9 +923,13 @@ def fetch_ashby_board(
         dept_str = item.get("department", "General")
 
         clean_text = item.get("descriptionPlain") or ""
+        sec_flags = []
         if not clean_text and item.get("descriptionHtml"):
-            soup = BeautifulSoup(html.unescape(item.get("descriptionHtml")), "html.parser")
-            clean_text = soup.get_text(separator="\n").strip()
+            clean_text, guard_findings = run_posting_guard(html.unescape(item.get("descriptionHtml")), mode="html")
+            sec_flags = list(guard_findings.get("security_flags") or [])
+        elif clean_text:
+            clean_text, guard_findings = run_posting_guard(clean_text, mode="text")
+            sec_flags = list(guard_findings.get("security_flags") or [])
 
         results.append({
             "id": f"ashby_{item.get('id')}",
@@ -976,6 +940,8 @@ def fetch_ashby_board(
             "url": job_url,
             "date": item.get("publishedAt", "")[:10] if item.get("publishedAt") else "",
             "description": clean_text,
+            "raw_text": clean_text,
+            "security_flags": sec_flags,
             "source": f"Ashby ({clean_token})",
             "is_evaluated": is_eval,
             "is_seen": is_seen,
@@ -1034,6 +1000,13 @@ def fetch_lever_board(
         location = cats.get("location", "Not Specified") if isinstance(cats, dict) else "Not Specified"
         team = cats.get("team", "General") if isinstance(cats, dict) else "General"
         clean_text = item.get("descriptionPlain") or ""
+        sec_flags = []
+        if not clean_text and item.get("description"):
+            clean_text, guard_findings = run_posting_guard(html.unescape(item.get("description")), mode="html")
+            sec_flags = list(guard_findings.get("security_flags") or [])
+        elif clean_text:
+            clean_text, guard_findings = run_posting_guard(clean_text, mode="text")
+            sec_flags = list(guard_findings.get("security_flags") or [])
 
         created_ms = item.get("createdAt", 0)
         date_str = ""
@@ -1052,6 +1025,8 @@ def fetch_lever_board(
             "url": job_url,
             "date": date_str,
             "description": clean_text,
+            "raw_text": clean_text,
+            "security_flags": sec_flags,
             "source": f"Lever ({clean_token})",
             "is_evaluated": is_eval,
             "is_seen": is_seen,

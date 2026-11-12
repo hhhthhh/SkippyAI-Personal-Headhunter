@@ -20,10 +20,12 @@ from evaluator import (
 st.title("🖼️ Saved Documents")
 st.caption("Browse, preview, filter, and download all your tailored resumes, cover letters, application answers, interview guides, follow-up messages, networking notes, and company research guides.")
 
-all_saved_jobs = db.load_all_jobs()
+all_saved_jobs = db.load_all_jobs(summary_only=True)
 
 
 def _has_generated_docs(job: dict) -> bool:
+    if job.get("_has_docs"):
+        return True
     for key in ("Tailored Resume", "Cover Letter", "Application QA", "Interview Prep", "Followup Note", "Outreach Message", "Company Intel", "Reviewer Audit"):
         val = job.get(key)
         if val and not pd.isna(val) and str(val).strip() and str(val).strip().lower() != "nan":
@@ -32,13 +34,7 @@ def _has_generated_docs(job: dict) -> bool:
 
 
 def _parse_job_timestamp(ts_str: str) -> datetime:
-    raw = str(ts_str or "").strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(raw[:19], fmt)
-        except ValueError:
-            continue
-    return datetime.min
+    return db.parse_date_safely(ts_str) or datetime.min
 
 
 gallery_jobs = [j for j in all_saved_jobs if _has_generated_docs(j)]
@@ -86,6 +82,7 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
         if st.button("🔍 Jump to Posting Details ➔", key=f"modal_jump_{safe_suffix}_{safe_prefix}", width="stretch", type="secondary", help="Jump directly to this job's expanded card and workspace on the Job History page"):
             st.session_state["active_job_url"] = url
             st.session_state["jump_to_card"] = True
+            st.session_state["_hist_jump_nonce"] = st.session_state.get("_hist_jump_nonce", 0) + 1
             st.switch_page("pages/2_history.py")
 
     cache_key = f"{doc_key}_{url}"
@@ -170,7 +167,7 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
             with dl_c1:
                 st.download_button(
                     "📥 Download ATS Resume (.docx)",
-                    data=generate_ats_resume_docx(active_content, template_style=ats_style_key),
+                    data=lambda: generate_ats_resume_docx(active_content, template_style=ats_style_key),
                     file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     width="stretch",
@@ -178,18 +175,30 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
                     key=f"modal_dl_docx_{file_prefix}_{url}",
                 )
             with dl_c2:
-                st.download_button(
-                    "📕 Download ATS Resume (.pdf)",
-                    data=lambda: generate_ats_resume_pdf(active_content, template_style=ats_style_key),
-                    file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.pdf",
-                    mime="application/pdf",
-                    width="stretch",
-                    key=f"modal_dl_pdf_{file_prefix}_{url}",
-                )
+                pdf_src = (active_content, ats_style_key)
+                pdf_state = f"pdf_bytes_{file_prefix}"
+                cached_pdf = st.session_state.get(pdf_state)
+                if not (cached_pdf and cached_pdf[0] == pdf_src) and st.button("📕 Prepare ATS PDF", width="stretch", key=f"prep_pdf_{file_prefix}"):
+                    with st.spinner("Converting to PDF (first run can take ~20s)..."):
+                        built = generate_ats_resume_pdf(*pdf_src)
+                    if built:
+                        st.session_state[pdf_state] = (pdf_src, built)
+                    else:
+                        st.warning("PDF conversion failed. Download the .docx instead, or try again.")
+                cached_pdf = st.session_state.get(pdf_state)
+                if cached_pdf and cached_pdf[0] == pdf_src:
+                    st.download_button(
+                        "📕 Download ATS (.pdf)",
+                        data=cached_pdf[1],
+                        file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.pdf",
+                        mime="application/pdf",
+                        width="stretch",
+                        key=f"modal_dl_pdf_{file_prefix}_{url}",
+                    )
         else:
             st.download_button(
                 "📥 Download ATS Resume (.docx)",
-                data=generate_ats_resume_docx(active_content, template_style=ats_style_key),
+                data=lambda: generate_ats_resume_docx(active_content, template_style=ats_style_key),
                 file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 width="stretch",
@@ -212,7 +221,7 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
             active_content = edited_val
         st.download_button(
             f"📥 Download {doc_label} (.docx)",
-            data=generate_docx_from_markdown(active_content),
+            data=lambda: generate_docx_from_markdown(active_content),
             file_name=f"{safe_prefix}_{safe_title}_{safe_suffix}.docx",
             width="stretch",
             type="primary",
@@ -330,7 +339,10 @@ if not filtered_jobs:
     st.warning("No generated document cards match your current timestamp or score filters.")
 else:
     cols = st.columns(3)
-    for index, job in enumerate(filtered_jobs):
+    gal_limit = st.session_state.get("gal_limit", 24)
+    for index, job in enumerate(filtered_jobs[:gal_limit]):
+        # Documents are fetched per rendered card only (summary rows carry no document text)
+        job = {**job, **db.load_job_detail(job.get("URL"))}
         with cols[index % 3]:
             with st.container(border=True):
                 score_val = int(job.get("Score", 0) or 0)
@@ -358,6 +370,7 @@ else:
                 ):
                     st.session_state["active_job_url"] = url_val
                     st.session_state["jump_to_card"] = True
+                    st.session_state["_hist_jump_nonce"] = st.session_state.get("_hist_jump_nonce", 0) + 1
                     st.switch_page("pages/2_history.py")
 
                 st.write("")
@@ -383,3 +396,8 @@ else:
                 render_gallery_button("Company Dossier", "Company Intel", "CompanyDossier", "🏢")
                 if job.get("Reviewer Audit") and str(job.get("Reviewer Audit")).lower() != "nan":
                     render_gallery_button("ATS & Fact Audit", "Reviewer Audit", "AuditReport", "🛡️")
+
+    if len(filtered_jobs) > gal_limit:
+        if st.button(f"Show more ({len(filtered_jobs) - gal_limit} remaining)", key="gal_show_more"):
+            st.session_state["gal_limit"] = gal_limit + 24
+            st.rerun()

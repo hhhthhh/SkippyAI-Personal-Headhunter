@@ -7,6 +7,7 @@ import streamlit as st
 import plotly.graph_objects as go
 
 import database as db
+from database import parse_date_safely
 
 
 def generate_safe_job_key(job: dict, prefix: str = "") -> str:
@@ -18,20 +19,6 @@ def generate_safe_job_key(job: dict, prefix: str = "") -> str:
     raw_id = url if url else f"{pos}_{comp}_{ts}"
     digest = hashlib.sha256(raw_id.encode("utf-8", errors="ignore")).hexdigest()[:16]
     return f"{prefix}_{digest}" if prefix else digest
-
-
-def parse_date_safely(d_str: str) -> datetime | None:
-    """Safely extracts a datetime object from standard string formats."""
-    if not d_str:
-        return None
-    d_str = str(d_str).strip()
-    m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", d_str)
-    if m:
-        try:
-            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        except Exception:
-            return None
-    return None
 
 
 def compute_sankey_data(jobs: list[dict], stale_days: int = 14) -> dict:
@@ -73,7 +60,7 @@ def compute_sankey_data(jobs: list[dict], stale_days: int = 14) -> dict:
             interviewing_all.append(j)
         else:
             # Standard 'Applied' - check staleness timer
-            date_str = j.get("Status Updated") or j.get("Timestamp") or ""
+            date_str = j.get("Applied Date") or j.get("Status Updated") or j.get("Timestamp") or ""
             d = parse_date_safely(date_str)
             days = (now - d).days if d else 0
             if days >= stale_days:
@@ -246,7 +233,7 @@ def render_sankey_section(history_data: list[dict]):
     m3.metric("Interview Rate", f"{sankey_data['screen_rate']:.1f}%", help="Interviews out of total jobs applied to")
     m4.metric("Job Offer Rate", f"{sankey_data['offer_rate']:.1f}%", help="Job offers out of total jobs applied to")
 
-    t_metrics = db.get_pipeline_turnaround_metrics()
+    t_metrics = db.get_pipeline_turnaround_metrics(stale_days=stale_days)
     if t_metrics.get("total_interviewed", 0) > 0 or t_metrics.get("total_rejected", 0) > 0 or t_metrics.get("ghosted_14d_count", 0) > 0:
         st.markdown("##### ⏱️ Employer Response Times")
         lat1, lat2, lat3 = st.columns(3)
@@ -261,9 +248,9 @@ def render_sankey_section(history_data: list[dict]):
             help="Average days from applying to receiving a rejection."
         )
         lat3.metric(
-            "No Response After 14+ Days",
+            f"No Response After {stale_days}+ Days",
             t_metrics["ghosted_14d_count"],
-            help="Applications waiting 14+ days without any update from the employer."
+            help=f"Applications waiting {stale_days}+ days without any update from the employer."
         )
 
     fig = build_sankey_figure(sankey_data)
@@ -342,7 +329,7 @@ def render_sankey_section(history_data: list[dict]):
                     st.session_state[db_tracker_key] = curr_status
 
             with st.container(border=True):
-                r1, r2, r3, r4 = st.columns([3.5, 1.4, 2.3, 2.8])
+                r1, r2, r3, r4, r5 = st.columns([3.3, 1.3, 2.1, 2.5, 0.8])
                 with r1:
                     st.markdown(f"**{pos}**")
                     st.caption(f"🏢 {comp} • Updated: {age_str}")
@@ -397,3 +384,9 @@ def render_sankey_section(history_data: list[dict]):
                         on_change=make_status_updater(url, select_key, db_tracker_key, pos),
                         label_visibility="collapsed"
                     )
+                with r5:
+                    if st.button("🗑️", key=f"sankey_del_{safe_id}", width="stretch", help="Delete this posting (keeps it marked as Seen)"):
+                        if url:
+                            db.delete_job_by_url(url, keep_seen=True)
+                        st.toast(f"🗑️ Removed '{pos}' (marked as Seen).")
+                        st.rerun()

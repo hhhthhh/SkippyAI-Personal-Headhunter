@@ -1,5 +1,6 @@
 import os
 import io
+import html
 import json
 import re
 import streamlit as st
@@ -147,42 +148,26 @@ def extract_text_from_uploaded_resume(uploaded_file) -> str:
         import shutil
         import subprocess
         import tempfile
-        soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
-        if soffice_bin:
-            try:
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    pdf_path = os.path.join(tmpdir, "upload.pdf")
-                    txt_path = os.path.join(tmpdir, "upload.txt")
-                    with open(pdf_path, "wb") as f:
-                        f.write(raw_bytes)
-                    subprocess.run(
-                        [soffice_bin, "--headless", "--convert-to", "txt:Text", "--outdir", tmpdir, pdf_path],
-                        capture_output=True,
-                        timeout=15,
-                        check=False,
-                    )
-                    if os.path.exists(txt_path):
-                        with open(txt_path, "r", encoding="utf-8", errors="ignore") as tf:
-                            extracted = tf.read().strip()
-                            if extracted:
-                                return extracted
-            except Exception:
-                pass
-        # Fallback pdftotext if installed
         pdftotext_bin = shutil.which("pdftotext")
-        if pdftotext_bin:
-            try:
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    pdf_path = os.path.join(tmpdir, "upload.pdf")
-                    txt_path = os.path.join(tmpdir, "upload.txt")
-                    with open(pdf_path, "wb") as f:
-                        f.write(raw_bytes)
-                    subprocess.run([pdftotext_bin, pdf_path, txt_path], capture_output=True, timeout=10, check=False)
-                    if os.path.exists(txt_path):
-                        with open(txt_path, "r", encoding="utf-8", errors="ignore") as tf:
-                            return tf.read().strip()
-            except Exception:
-                pass
+        soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdf_path = os.path.join(tmpdir, "upload.pdf")
+            txt_path = os.path.join(tmpdir, "upload.txt")
+            with open(pdf_path, "wb") as f:
+                f.write(raw_bytes)
+            if pdftotext_bin:
+                subprocess.run([pdftotext_bin, pdf_path, txt_path], capture_output=True, timeout=10, check=False)
+            if not os.path.exists(txt_path) and soffice_bin:
+                subprocess.run(
+                    [soffice_bin, "--headless", "--infilter=writer_pdf_import", "--convert-to", "txt:Text", "--outdir", tmpdir, pdf_path],
+                    capture_output=True,
+                    timeout=15,
+                    check=False,
+                )
+            if os.path.exists(txt_path):
+                with open(txt_path, "r", encoding="utf-8", errors="ignore") as tf:
+                    return tf.read().strip()
+        return ""
 
     return raw_bytes.decode("utf-8", errors="ignore").strip()
 
@@ -221,7 +206,7 @@ def render_resume_selector(key_suffix: str = "main", in_sidebar: bool = False) -
     to use for evaluation or document generation to prevent long wait times.
     Returns `(selected_resume_names, combined_resume_text)`.
     """
-    vault = load_resumes()
+    vault = st.session_state.get("resumes_vault") or load_resumes()
     st.session_state["resumes_vault"] = vault
     all_names = list(vault.keys())
     if not all_names:
@@ -430,9 +415,10 @@ def render_prompt_mode_toggle(in_sidebar: bool = True, key_suffix: str = ""):
             st.subheader("🎯 AI Instructions")
             
             if details["is_compass"]:
+                safe_title = html.escape(str(details["title"]))
                 st.markdown(
                     f":green-background[**Active: 🧭 Career Profile**]  \n"
-                    f"<small style='opacity:0.85;'>Profile: <b>{details['title']}</b></small>",
+                    f"<small style='opacity:0.85;'>Profile: <b>{safe_title}</b></small>",
                     unsafe_allow_html=True
                 )
             else:
@@ -529,6 +515,9 @@ def initialize_core_state():
     if "local_model_name" not in st.session_state:
         st.session_state["local_model_name"] = get_setting("local_model_name", "llama3")
 
+    if "model_override" not in st.session_state:
+        st.session_state["model_override"] = get_setting("model_override", "")
+
     # 4. Load API Key from disk BEFORE the gatekeeper checks it
     if "user_api_key" not in st.session_state or not st.session_state.user_api_key:
         st.session_state.user_api_key = load_local_config()
@@ -573,9 +562,11 @@ def render_pipeline_spinner_html(
     size_px = 18 if compact else 24
     border_px = 2.5 if compact else 3
     font_size = "0.95rem" if compact else "1.15rem"
+    safe_title = html.escape(str(title or ""))
+    safe_subtitle = html.escape(str(subtitle or ""))
     sub_html = (
-        f"<div style='font-size:0.82rem; opacity:0.85; margin-top:2px;'>{subtitle}</div>"
-        if subtitle else ""
+        f"<div style='font-size:0.82rem; opacity:0.85; margin-top:2px;'>{safe_subtitle}</div>"
+        if safe_subtitle else ""
     )
     st.markdown(
         f"""
@@ -596,13 +587,73 @@ def render_pipeline_spinner_html(
                 flex-shrink:0;
             "></div>
             <div>
-                <div style="font-weight:600; font-size:{font_size}; line-height:1.25;">{title}</div>
+                <div style="font-weight:600; font-size:{font_size}; line-height:1.25;">{safe_title}</div>
                 {sub_html}
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def start_scraper_evaluations(items: list) -> None:
+    """Starts the background evaluation pipeline for a list of job dicts or URLs."""
+    if pipeline_manager.is_running:
+        st.warning("⚠️ An evaluation pipeline is already running in the background. Please wait for it to complete or stop it from the sidebar.")
+        return
+
+    chosen_resumes = st.session_state.get("selected_resumes", ["Master Resume"])
+    combined_resume = combine_selected_resumes(chosen_resumes)
+    st.session_state.resume_text = combined_resume
+
+    started = pipeline_manager.start_url_pipeline(
+        urls=items,
+        resume_text=combined_resume,
+        system_instructions=st.session_state.system_instructions,
+        model_choice=st.session_state.get("model_choice", "Google Gemini"),
+        api_key=st.session_state.get("user_api_key", ""),
+        local_base_url=st.session_state.get("local_base_url", ""),
+        local_model_name=st.session_state.get("local_model_name", ""),
+        model_override=st.session_state.get("model_override", ""),
+        source="Scraper",
+        matched_resumes=", ".join(chosen_resumes),
+    )
+    if started:
+        if "completion_batch" in st.session_state:
+            del st.session_state["completion_batch"]
+        st.rerun()
+
+
+@st.fragment(run_every="2s")
+def render_active_scraper_pipeline_banner(stop_key: str = "stop_scraper_pipeline_main") -> None:
+    """Renders the live progress banner and stop control when a Scraper evaluation batch is running."""
+    check_and_handle_pipeline_completion()
+    status = pipeline_manager.get_status()
+    if status.get("is_running") and status.get("source") == "Scraper":
+        with st.container(border=True):
+            if status.get("is_stopping"):
+                render_pipeline_spinner_html(
+                    "Stopping Review...",
+                    "Halting background review pipeline gracefully...",
+                    is_stopping=True,
+                )
+                st.button("🛑 Stopping...", key=stop_key, disabled=True)
+            else:
+                total = max(status.get("total", 1), 1)
+                completed = status.get("completed", 0)
+                prog = min(completed / total, 1.0)
+                cur = status.get("current_job", "Initializing...")
+                if len(cur) > 60:
+                    cur = cur[:57] + "..."
+                render_pipeline_spinner_html(
+                    "Reviewing Jobs in the Background...",
+                    f"Evaluating ({completed}/{total}): {cur}",
+                )
+                st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
+                st.info("💡 **You can freely explore other pages:** Reviewing continues in the background while you browse.")
+                if st.button("🛑 Stop Review", key=stop_key):
+                    pipeline_manager.cancel()
+                    st.rerun()
 
 
 @st.fragment(run_every="2s")
@@ -670,8 +721,7 @@ def inject_interactive_hover_halo_effects():
     and navigation elements styled in blue and white.
     """
     st.markdown(
-        """
-        <style>
+        """<style>
         /* Smooth transitions for interactive buttons */
         .stButton > button,
         .stFormSubmitButton > button,
@@ -882,30 +932,67 @@ def setup_sidebar():
     st.sidebar.header("🔌 LLM Configuration")
     
     model_options = ["Google Gemini", "OpenAI ChatGPT", "xAI Grok", "Anthropic Claude", "Local / Custom (Ollama)"]
-    st.session_state["model_choice"] = st.sidebar.selectbox(
+    current_provider = st.session_state.get("model_choice", "Google Gemini")
+    if current_provider not in model_options:
+        current_provider = "Google Gemini"
+        st.session_state["model_choice"] = current_provider
+
+    if st.session_state.get("sb_model_choice_select") not in model_options:
+        st.session_state["sb_model_choice_select"] = current_provider
+
+    def _on_sidebar_model_change():
+        chosen = st.session_state.get("sb_model_choice_select", "Google Gemini")
+        st.session_state["model_choice"] = chosen
+        set_setting("model_choice", chosen)
+
+    st.sidebar.selectbox(
         "Select AI Provider",
         model_options,
-        index=model_options.index(st.session_state.get("model_choice", "Google Gemini"))
+        key="sb_model_choice_select",
+        on_change=_on_sidebar_model_change,
     )
-
-    st.session_state["model_override"] = st.sidebar.text_input(
-        "Model Version Override (Optional)", 
-        value=st.session_state.get("model_override", ""),
-        help="Leave blank for defaults. Example: 'gemini-4.5-pro' or 'gpt-5'."
-    )
+    st.session_state["model_choice"] = st.session_state["sb_model_choice_select"]
 
     def confirm_api_key():
-        if st.session_state.get("temp_api_key_input"):
-            st.toast("API Key successfully registered!", icon="🔑")
+        new_key = (st.session_state.get("temp_api_key_input") or "").strip()
+        if new_key and new_key != st.session_state.get("user_api_key", ""):
+            save_local_config(new_key)
+            st.session_state["user_api_key"] = new_key
+            st.toast("Key Accepted! ✅", icon="🔑")
 
     if "Local" in st.session_state["model_choice"]:
-        st.session_state["local_base_url"] = st.sidebar.text_input("Local API Base URL", value="http://localhost:11434/v1")
-        st.session_state["local_model_name"] = st.sidebar.text_input("Local Model Name", value="llama3")
+        if "sb_local_base_url" not in st.session_state:
+            st.session_state["sb_local_base_url"] = st.session_state.get("local_base_url", "http://localhost:11434/v1")
+        if "sb_local_model_name" not in st.session_state:
+            st.session_state["sb_local_model_name"] = st.session_state.get("local_model_name", "llama3")
+
+        def _on_local_llm_change():
+            base_url = (st.session_state.get("sb_local_base_url") or "http://localhost:11434/v1").strip()
+            model_name = (st.session_state.get("sb_local_model_name") or "llama3").strip()
+            st.session_state["local_base_url"] = base_url
+            st.session_state["local_model_name"] = model_name
+            set_setting("local_base_url", base_url)
+            set_setting("local_model_name", model_name)
+
+        st.sidebar.text_input(
+            "Local API Base URL",
+            key="sb_local_base_url",
+            on_change=_on_local_llm_change,
+        )
+        st.sidebar.text_input(
+            "Local Model Name",
+            key="sb_local_model_name",
+            on_change=_on_local_llm_change,
+        )
+        st.session_state["local_base_url"] = st.session_state["sb_local_base_url"]
+        st.session_state["local_model_name"] = st.session_state["sb_local_model_name"]
     else:
         current_key = st.session_state.get("user_api_key", "")
+        if "temp_api_key_input" not in st.session_state:
+            st.session_state["temp_api_key_input"] = current_key
+
         updated_key = st.sidebar.text_input(
             "Enter API Key", 
-            value=current_key,
             type="password", 
             key="temp_api_key_input",
             on_change=confirm_api_key,
@@ -915,8 +1002,23 @@ def setup_sidebar():
         if updated_key and updated_key != current_key:
             save_local_config(updated_key)
             st.session_state["user_api_key"] = updated_key
-            st.toast("Key Accepted! ✅", icon="🔑")
-            st.rerun()
+
+        with st.sidebar.expander("⚙️ Advanced Settings"):
+            if "sb_model_override" not in st.session_state:
+                st.session_state["sb_model_override"] = st.session_state.get("model_override", "")
+
+            def _on_model_override_change():
+                override_val = (st.session_state.get("sb_model_override") or "").strip()
+                st.session_state["model_override"] = override_val
+                set_setting("model_override", override_val)
+
+            st.text_input(
+                "Model Version Override (Optional)",
+                key="sb_model_override",
+                on_change=_on_model_override_change,
+                help="Leave blank to use recommended defaults (e.g., 'gemini-flash-latest' or 'gpt-4o-mini'). Examples: 'gemini-2.5-pro', 'gpt-4o', 'claude-3-7-sonnet-latest'.",
+            )
+            st.session_state["model_override"] = st.session_state["sb_model_override"]
 
     render_prompt_mode_toggle(in_sidebar=True)
     render_help_section(in_sidebar=True)
@@ -960,9 +1062,21 @@ def enforce_onboarding():
 
         model_options = ["Google Gemini", "OpenAI ChatGPT", "xAI Grok", "Anthropic Claude", "Local / Custom (Ollama)"]
         current_choice = st.session_state.get("model_choice", "Google Gemini")
-        chosen_idx = model_options.index(current_choice) if current_choice in model_options else 0
-        selected_model = st.selectbox("Select AI Provider", model_options, index=chosen_idx)
-        st.session_state["model_choice"] = selected_model
+        if current_choice not in model_options:
+            current_choice = "Google Gemini"
+            st.session_state["model_choice"] = current_choice
+
+        if st.session_state.get("onboarding_model_choice_select") not in model_options:
+            st.session_state["onboarding_model_choice_select"] = current_choice
+
+        selected_model = st.selectbox(
+            "Select AI Provider",
+            model_options,
+            key="onboarding_model_choice_select",
+        )
+        if "Local" not in selected_model:
+            st.session_state["model_choice"] = selected_model
+            st.session_state["sb_model_choice_select"] = selected_model
 
         api_key_val = st.session_state.get("user_api_key", "")
         local_base = st.session_state.get("local_base_url", "http://localhost:11434/v1")
@@ -1018,12 +1132,16 @@ def enforce_onboarding():
 
         with col_save:
             if st.button("Save & Continue ➔", type="primary", width="stretch"):
+                st.session_state["model_choice"] = selected_model
+                st.session_state["sb_model_choice_select"] = selected_model
                 set_setting("model_choice", selected_model)
                 if selected_model == "Local / Custom (Ollama)":
                     set_setting("local_base_url", local_base)
                     set_setting("local_model_name", local_model)
                     st.session_state["local_base_url"] = local_base
                     st.session_state["local_model_name"] = local_model
+                    st.session_state["sb_local_base_url"] = local_base
+                    st.session_state["sb_local_model_name"] = local_model
                     st.session_state["show_key_success"] = True
                     st.rerun()
                 else:
@@ -1214,10 +1332,6 @@ def enforce_onboarding():
             mark_onboarding_completed()
             st.session_state["show_quick_start"] = True
             st.rerun()
-
-        st.markdown("---")
-        render_help_section(in_sidebar=False)
-        st.stop()
 
         st.markdown("---")
         render_help_section(in_sidebar=False)
