@@ -1004,6 +1004,27 @@ def setup_sidebar():
             save_local_config(updated_key)
             st.session_state["user_api_key"] = updated_key
 
+        col_sb_save, col_sb_test = st.sidebar.columns([1, 1])
+        with col_sb_save:
+            if st.button("💾 Save Key", key="btn_sb_save_key", width="stretch"):
+                val = (st.session_state.get("temp_api_key_input") or "").strip().strip("'\"")
+                if val:
+                    save_local_config(val)
+                    st.session_state["user_api_key"] = val
+                    st.toast("API key saved to .env! ✅", icon="💾")
+        with col_sb_test:
+            if st.button("🧪 Test", key="btn_sb_test_key", width="stretch"):
+                val = (st.session_state.get("temp_api_key_input") or "").strip().strip("'\"")
+                if val:
+                    save_local_config(val)
+                    st.session_state["user_api_key"] = val
+                with st.spinner("Testing..."):
+                    ok, msg = test_ai_connection(st.session_state["model_choice"], val)
+                    if ok:
+                        st.sidebar.success("Connected! ✅")
+                    else:
+                        st.sidebar.error(f"❌ {msg[:120]}")
+
         with st.sidebar.expander("⚙️ Advanced Settings"):
             if "sb_model_override" not in st.session_state:
                 st.session_state["sb_model_override"] = st.session_state.get("model_override", "")
@@ -1083,6 +1104,12 @@ def enforce_onboarding():
         local_base = st.session_state.get("local_base_url", "http://localhost:11434/v1")
         local_model = st.session_state.get("local_model_name", "llama3")
 
+        def _on_gemini_key_change():
+            val = (st.session_state.get("onboarding_gemini_api_key_input") or "").strip().strip("'\"")
+            if val:
+                save_local_config(val)
+                st.session_state["user_api_key"] = val
+
         if selected_model == "Google Gemini":
             st.info(
                 "💡 **Google Gemini is free to use** with no credit card required. "
@@ -1094,6 +1121,7 @@ def enforce_onboarding():
                 value=api_key_val,
                 type="password",
                 key="onboarding_gemini_api_key_input",
+                on_change=_on_gemini_key_change,
                 help="Get a free key from Google AI Studio (takes 30 seconds, no credit card required)."
             )
         elif selected_model == "Local / Custom (Ollama)":
@@ -1110,11 +1138,18 @@ def enforce_onboarding():
             api_key_input = ""
         else:
             provider_slug = selected_model.replace(" ", "_").lower()
+            def _on_other_key_change():
+                val = (st.session_state.get(f"onboarding_{provider_slug}_api_key_input") or "").strip().strip("'\"")
+                if val:
+                    save_local_config(val)
+                    st.session_state["user_api_key"] = val
+
             api_key_input = st.text_input(
                 f"Enter {selected_model} API Key",
                 value=api_key_val,
                 type="password",
                 key=f"onboarding_{provider_slug}_api_key_input",
+                on_change=_on_other_key_change,
                 help=f"Enter your API key for {selected_model}."
             )
 
@@ -1123,6 +1158,9 @@ def enforce_onboarding():
         col_test, col_save = st.columns([1, 1.4])
         with col_test:
             if st.button("🧪 Test Connection", type="secondary", width="stretch"):
+                if clean_input_key and selected_model != "Local / Custom (Ollama)":
+                    save_local_config(clean_input_key)
+                    st.session_state["user_api_key"] = clean_input_key
                 with st.spinner("Testing AI connection..."):
                     test_key = clean_input_key if selected_model != "Local / Custom (Ollama)" else ""
                     ok, msg = test_ai_connection(
@@ -1133,10 +1171,7 @@ def enforce_onboarding():
                     )
                     if ok:
                         st.success(f"✅ {msg}")
-                        if test_key:
-                            save_local_config(test_key)
-                            st.session_state["user_api_key"] = test_key
-                            st.toast("API Key verified and saved to .env! 🔑", icon="✅")
+                        st.toast("API Key verified and saved to .env! 🔑", icon="✅")
                     else:
                         st.error(f"❌ {msg}")
 

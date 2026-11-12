@@ -330,9 +330,6 @@ def execute_with_retry(api_call_func, max_attempts: int = 4):
 
 _GEMINI_FALLBACK_MODELS = (
     "gemini/gemini-flash-latest",
-    "gemini/gemini-3.5-flash-lite",
-    "gemini/gemini-3.8-flash",
-    "gemini/gemini-3.5-flash",
     "gemini/gemini-flash-lite-latest",
     "gemini/gemini-pro-latest",
 )
@@ -358,7 +355,6 @@ def resolve_model_id(
     if "Gemini" in model_choice:
         if override:
             return f"gemini/{override}"
-        # gemini-flash-latest is Google's universal flash alias
         return "gemini/gemini-flash-latest"
     elif "OpenAI" in model_choice or "ChatGPT" in model_choice:
         return f"openai/{override or 'gpt-4o-mini'}"

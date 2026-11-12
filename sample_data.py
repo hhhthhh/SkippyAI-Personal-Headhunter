@@ -254,7 +254,7 @@ def test_ai_connection(
             "messages": [
                 {"role": "user", "content": "Ping. Reply with: OK"}
             ],
-            "max_tokens": 10,
+            "max_tokens": 60,
             "timeout": 12,
         }
 
