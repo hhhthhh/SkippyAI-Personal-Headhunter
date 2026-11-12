@@ -394,12 +394,8 @@ def set_active_prompt_mode(mode: str) -> None:
     st.session_state["prompt_mode"] = clean_mode
     set_setting(PROMPT_MODE_SETTING, clean_mode)
 
-    # Synchronize sidebar radio toggle widget state so widgets stay in sync
-    target_radio_label = "🧭 Career Profile" if clean_mode == PROMPT_MODE_COMPASS else "⚙️ Custom Instructions"
-    st.session_state["prompt_mode_toggle_sb"] = target_radio_label
-    for k in list(st.session_state.keys()):
-        if k.startswith("prompt_mode_toggle_sb"):
-            st.session_state[k] = target_radio_label
+    # Bump version counter so sidebar radio renders with updated index cleanly without widget conflicts
+    st.session_state["prompt_mode_version"] = st.session_state.get("prompt_mode_version", 0) + 1
 
     details = get_active_prompt_details()
     active_text = details["prompt_text"]
@@ -437,12 +433,9 @@ def render_prompt_mode_toggle(in_sidebar: bool = True, key_suffix: str = ""):
                 )
             
             mode_options = ["🧭 Career Profile", "⚙️ Custom Instructions"]
-            radio_key = f"prompt_mode_toggle_sb_{key_suffix}".strip("_")
-            expected_label = "🧭 Career Profile" if current_mode == PROMPT_MODE_COMPASS else "⚙️ Custom Instructions"
-            
-            # Ensure the widget's session state strictly reflects the current active prompt mode
-            if st.session_state.get(radio_key) != expected_label:
-                st.session_state[radio_key] = expected_label
+            current_idx = 0 if current_mode == PROMPT_MODE_COMPASS else 1
+            ver = st.session_state.get("prompt_mode_version", 0)
+            radio_key = f"prompt_mode_toggle_sb_v{ver}_{key_suffix}".strip("_")
 
             def _on_prompt_mode_change():
                 chosen_label = st.session_state.get(radio_key)
@@ -451,7 +444,6 @@ def render_prompt_mode_toggle(in_sidebar: bool = True, key_suffix: str = ""):
                 new_details = get_active_prompt_details()
                 st.toast(f"🎯 AI instructions switched to: {new_details['title']}", icon="✅")
 
-            current_idx = 0 if current_mode == PROMPT_MODE_COMPASS else 1
             st.radio(
                 "Evaluation Prompt Strategy:",
                 mode_options,
