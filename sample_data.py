@@ -249,13 +249,17 @@ def test_ai_connection(
 
         completion_fn = _get_completion()
 
+        ping_model = target_model
+        if "Gemini" in (model_choice or ""):
+            ping_model = "gemini/gemini-flash-lite-latest"
+
         kwargs = {
-            "model": target_model,
+            "model": ping_model,
             "messages": [
                 {"role": "user", "content": "Ping. Reply with: OK"}
             ],
             "max_tokens": 60,
-            "timeout": 12,
+            "timeout": 35,
         }
 
         if is_local:
@@ -268,11 +272,14 @@ def test_ai_connection(
 
         try:
             response = completion_fn(**kwargs)
+            target_model = ping_model
         except Exception as first_err:
             err_low = str(first_err).lower()
             is_model_unavailable = (
                 "404" in err_low
                 or "503" in err_low
+                or "timeout" in err_low
+                or "timed out" in err_low
                 or "serviceunavailable" in err_low
                 or "service unavailable" in err_low
                 or "high demand" in err_low
@@ -291,7 +298,7 @@ def test_ai_connection(
                 response = None
                 last_err = first_err
                 for candidate in _GEMINI_FALLBACK_MODELS:
-                    if candidate == target_model:
+                    if candidate == ping_model:
                         continue
                     try:
                         kwargs["model"] = candidate
@@ -323,6 +330,8 @@ def test_ai_connection(
             return False, "API quota exceeded for this key. Please check your billing or plan limits."
         if "503" in err_str or "high demand" in err_low or "serviceunavailable" in err_low:
             return False, "Google's servers are temporarily experiencing high demand (503). Please wait a moment and try again."
+        if "timeout" in err_low or "timed out" in err_low:
+            return False, "Connection timed out. Google's servers took too long to reply. Please try again."
         if "rate_limit" in err_low or "429" in err_str:
             return False, "Rate limit reached on provider. Please wait a moment and try again."
         return False, f"Connection failed: {err_str[:160]}"
