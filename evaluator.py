@@ -30,21 +30,28 @@ SCORE_WEIGHTS = {
 def _get_completion():
     global _completion_fn
     if _completion_fn is None:
+        import logging
         import litellm
+        logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+        logging.getLogger("litellm").setLevel(logging.ERROR)
         litellm.suppress_debug_info = True
         try:
             litellm.register_model({
-                "gemini/gemini-2.0-flash": {
-                    "max_tokens": 8192,
-                    "input_cost_per_token": 0.0000001,
-                    "output_cost_per_token": 0.0000004,
-                    "litellm_provider": "gemini",
-                    "mode": "chat",
-                },
                 "gemini/gemini-1.5-flash": {
                     "max_tokens": 8192,
                     "input_cost_per_token": 0.000000075,
                     "output_cost_per_token": 0.0000003,
+                    "cache_creation_input_token_cost": 0,
+                    "cache_read_input_token_cost": 0,
+                    "litellm_provider": "gemini",
+                    "mode": "chat",
+                },
+                "gemini/gemini-2.0-flash": {
+                    "max_tokens": 8192,
+                    "input_cost_per_token": 0.0000001,
+                    "output_cost_per_token": 0.0000004,
+                    "cache_creation_input_token_cost": 0,
+                    "cache_read_input_token_cost": 0,
                     "litellm_provider": "gemini",
                     "mode": "chat",
                 },
@@ -52,6 +59,8 @@ def _get_completion():
                     "max_tokens": 8192,
                     "input_cost_per_token": 0.00000125,
                     "output_cost_per_token": 0.000005,
+                    "cache_creation_input_token_cost": 0,
+                    "cache_read_input_token_cost": 0,
                     "litellm_provider": "gemini",
                     "mode": "chat",
                 },
@@ -311,8 +320,8 @@ def execute_with_retry(api_call_func, max_attempts: int = 4):
 
 
 _GEMINI_FALLBACK_MODELS = (
-    "gemini/gemini-2.0-flash",
     "gemini/gemini-1.5-flash",
+    "gemini/gemini-2.0-flash",
     "gemini/gemini-flash-latest",
     "gemini/gemini-2.5-flash",
     "gemini/gemini-1.5-pro",
@@ -353,8 +362,9 @@ def resolve_model_id(
         # Developer tokens (Antigravity CLI internal) route to gemini-flash-latest
         if key_candidate.startswith("AQ.") or key_candidate.startswith("AQ"):
             return "gemini/gemini-flash-latest"
-        # Standard public Google AI Studio keys (AIzaSy...) and all other keys route to public gemini-2.0-flash
-        return "gemini/gemini-2.0-flash"
+        # Standard public Google AI Studio keys (AIzaSy...) and all other keys route to gemini-1.5-flash
+        # for rock-solid stability and zero 503 high-demand spikes.
+        return "gemini/gemini-1.5-flash"
     elif "OpenAI" in model_choice or "ChatGPT" in model_choice:
         return f"openai/{override or 'gpt-4o-mini'}"
     elif "Grok" in model_choice:
@@ -437,6 +447,12 @@ def call_unified_llm(
         err_low = str(first_err).lower()
         is_model_unavailable = (
             "404" in err_low
+            or "503" in err_low
+            or "serviceunavailable" in err_low
+            or "service unavailable" in err_low
+            or "high demand" in err_low
+            or "overloaded" in err_low
+            or "temporarily unavailable" in err_low
             or "notfound" in err_low
             or "no longer available" in err_low
             or "not found" in err_low
@@ -444,6 +460,7 @@ def call_unified_llm(
             or "unsupported" in err_low
             or "api_key_invalid" in err_low
             or "invalid_argument" in err_low
+            or "badrequesterror" in err_low
         )
         if "Gemini" in (model_choice or "") and not (model_override or "").strip() and is_model_unavailable:
             for candidate in _GEMINI_FALLBACK_MODELS:

@@ -272,6 +272,12 @@ def test_ai_connection(
             err_low = str(first_err).lower()
             is_model_unavailable = (
                 "404" in err_low
+                or "503" in err_low
+                or "serviceunavailable" in err_low
+                or "service unavailable" in err_low
+                or "high demand" in err_low
+                or "overloaded" in err_low
+                or "temporarily unavailable" in err_low
                 or "notfound" in err_low
                 or "not found" in err_low
                 or "no longer available" in err_low
@@ -312,6 +318,8 @@ def test_ai_connection(
             return False, f"Could not connect to {local_base_url or 'localhost'}. Is your local model server running?"
         if "quota" in err_str.lower() or "resource_exhausted" in err_str.lower():
             return False, "API quota exceeded for this key. Please check your billing or plan limits."
+        if "503" in err_str or "high demand" in err_str.lower() or "serviceunavailable" in err_str.lower():
+            return False, "Google's servers are temporarily experiencing high demand (503). Please wait a moment and try again."
         if "rate_limit" in err_str.lower() or "429" in err_str:
             return False, "Rate limit reached on provider. Please wait a moment and try again."
         return False, f"Connection failed: {err_str[:160]}"
