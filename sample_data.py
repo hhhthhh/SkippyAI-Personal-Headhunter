@@ -231,7 +231,7 @@ def test_ai_connection(
     Performs a lightweight, non-destructive connection test to the selected AI provider.
     Returns (True, success_message) or (False, error_message).
     """
-    clean_key = (api_key or "").strip()
+    clean_key = (api_key or "").strip().strip("'\"")
     is_local = "Local" in (model_choice or "")
 
     if not is_local and not clean_key:
@@ -243,7 +243,8 @@ def test_ai_connection(
         target_model = resolve_model_id(
             model_choice=model_choice,
             local_model_name=local_model_name,
-            model_override=""
+            model_override="",
+            api_key=clean_key
         )
 
         completion_fn = _get_completion()
@@ -269,7 +270,17 @@ def test_ai_connection(
             response = completion_fn(**kwargs)
         except Exception as first_err:
             err_low = str(first_err).lower()
-            is_model_unavailable = "404" in err_low or "notfound" in err_low or "no longer available" in err_low or "not found" in err_low
+            is_model_unavailable = (
+                "404" in err_low
+                or "notfound" in err_low
+                or "not found" in err_low
+                or "no longer available" in err_low
+                or "not supported" in err_low
+                or "unsupported" in err_low
+                or "api_key_invalid" in err_low
+                or "invalid_argument" in err_low
+                or "badrequesterror" in err_low
+            )
             if "Gemini" in (model_choice or "") and is_model_unavailable:
                 response = None
                 last_err = first_err
@@ -299,6 +310,8 @@ def test_ai_connection(
             return False, "Invalid API key. Please check your key from the provider dashboard."
         if "ConnectionRefused" in err_str or "Failed to establish a new connection" in err_str:
             return False, f"Could not connect to {local_base_url or 'localhost'}. Is your local model server running?"
+        if "quota" in err_str.lower() or "resource_exhausted" in err_str.lower():
+            return False, "API quota exceeded for this key. Please check your billing or plan limits."
         if "rate_limit" in err_str.lower() or "429" in err_str:
             return False, "Rate limit reached on provider. Please wait a moment and try again."
         return False, f"Connection failed: {err_str[:160]}"

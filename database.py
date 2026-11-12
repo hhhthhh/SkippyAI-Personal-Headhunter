@@ -105,8 +105,9 @@ def atomic_write_json(filepath: str, data: any, indent: int = 2) -> None:
 def set_env_var_safe(key: str, value: str, env_file: str = ".env") -> None:
     """Safely updates an environment variable in memory and persists to .env (Docker safe)."""
     from dotenv import set_key
+    clean_val = (value or "").strip().strip("'\"")
     try:
-        set_key(env_file, key, value, quote_mode="always")
+        set_key(env_file, key, clean_val, quote_mode="always")
     except OSError:
         lines = []
         if os.path.exists(env_file):
@@ -115,7 +116,7 @@ def set_env_var_safe(key: str, value: str, env_file: str = ".env") -> None:
                     lines = f.readlines()
             except OSError:
                 lines = []
-        escaped_val = value.replace("\\", "\\\\").replace("'", "\\'")
+        escaped_val = clean_val.replace("\\", "\\\\").replace("'", "\\'")
         new_line = f"{key}='{escaped_val}'\n"
         updated = False
         for i, line in enumerate(lines):
@@ -132,7 +133,7 @@ def set_env_var_safe(key: str, value: str, env_file: str = ".env") -> None:
                 f.writelines(lines)
         except OSError:
             pass
-    os.environ[key] = value
+    os.environ[key] = clean_val
     secure_file_permissions(env_file)
 
 

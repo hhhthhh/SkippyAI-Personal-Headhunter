@@ -44,10 +44,11 @@ secure_file_permissions(ENV_FILE)
 load_dotenv(ENV_FILE)
 
 def load_local_config():
-    return os.environ.get("USER_API_KEY", "")
+    return (os.environ.get("USER_API_KEY", "") or "").strip().strip("'\"")
 
 def save_local_config(api_key):
-    set_env_var_safe("USER_API_KEY", api_key, env_file=ENV_FILE)
+    clean_key = (api_key or "").strip().strip("'\"")
+    set_env_var_safe("USER_API_KEY", clean_key, env_file=ENV_FILE)
 
 def render_help_content():
     st.markdown("**🔑 Acquiring API Keys**")
@@ -954,7 +955,7 @@ def setup_sidebar():
     st.session_state["model_choice"] = st.session_state["sb_model_choice_select"]
 
     def confirm_api_key():
-        new_key = (st.session_state.get("temp_api_key_input") or "").strip()
+        new_key = (st.session_state.get("temp_api_key_input") or "").strip().strip("'\"")
         if new_key and new_key != st.session_state.get("user_api_key", ""):
             save_local_config(new_key)
             st.session_state["user_api_key"] = new_key
@@ -991,13 +992,13 @@ def setup_sidebar():
         if "temp_api_key_input" not in st.session_state:
             st.session_state["temp_api_key_input"] = current_key
 
-        updated_key = st.sidebar.text_input(
+        updated_key = (st.sidebar.text_input(
             "Enter API Key", 
             type="password", 
             key="temp_api_key_input",
             on_change=confirm_api_key,
             help="Works seamlessly with the selected provider."
-        )
+        ) or "").strip().strip("'\"")
         
         if updated_key and updated_key != current_key:
             save_local_config(updated_key)
@@ -1092,6 +1093,7 @@ def enforce_onboarding():
                 "Enter Google Gemini API Key",
                 value=api_key_val,
                 type="password",
+                key="onboarding_gemini_api_key_input",
                 help="Get a free key from Google AI Studio (takes 30 seconds, no credit card required)."
             )
         elif selected_model == "Local / Custom (Ollama)":
@@ -1102,23 +1104,27 @@ def enforce_onboarding():
             )
             c_url, c_mod = st.columns(2)
             with c_url:
-                local_base = st.text_input("Local API Base URL", value=local_base)
+                local_base = st.text_input("Local API Base URL", value=local_base, key="onboarding_local_base_url_input")
             with c_mod:
-                local_model = st.text_input("Local Model Name", value=local_model)
+                local_model = st.text_input("Local Model Name", value=local_model, key="onboarding_local_model_name_input")
             api_key_input = ""
         else:
+            provider_slug = selected_model.replace(" ", "_").lower()
             api_key_input = st.text_input(
                 f"Enter {selected_model} API Key",
                 value=api_key_val,
                 type="password",
+                key=f"onboarding_{provider_slug}_api_key_input",
                 help=f"Enter your API key for {selected_model}."
             )
+
+        clean_input_key = (api_key_input or "").strip().strip("'\"")
 
         col_test, col_save = st.columns([1, 1.4])
         with col_test:
             if st.button("🧪 Test Connection", type="secondary", width="stretch"):
                 with st.spinner("Testing AI connection..."):
-                    test_key = api_key_input.strip() if selected_model != "Local / Custom (Ollama)" else ""
+                    test_key = clean_input_key if selected_model != "Local / Custom (Ollama)" else ""
                     ok, msg = test_ai_connection(
                         selected_model,
                         test_key,
@@ -1145,9 +1151,9 @@ def enforce_onboarding():
                     st.session_state["show_key_success"] = True
                     st.rerun()
                 else:
-                    if api_key_input.strip():
-                        save_local_config(api_key_input.strip())
-                        st.session_state["user_api_key"] = api_key_input.strip()
+                    if clean_input_key:
+                        save_local_config(clean_input_key)
+                        st.session_state["user_api_key"] = clean_input_key
                         st.session_state["show_key_success"] = True
                         st.rerun()
                     else:

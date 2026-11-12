@@ -31,8 +31,33 @@ def _get_completion():
     global _completion_fn
     if _completion_fn is None:
         import litellm
-        # LiteLLM prints "Provider List: ..." when it can't look up an alias like gemini-flash-latest
         litellm.suppress_debug_info = True
+        try:
+            litellm.register_model({
+                "gemini/gemini-2.0-flash": {
+                    "max_tokens": 8192,
+                    "input_cost_per_token": 0.0000001,
+                    "output_cost_per_token": 0.0000004,
+                    "litellm_provider": "gemini",
+                    "mode": "chat",
+                },
+                "gemini/gemini-1.5-flash": {
+                    "max_tokens": 8192,
+                    "input_cost_per_token": 0.000000075,
+                    "output_cost_per_token": 0.0000003,
+                    "litellm_provider": "gemini",
+                    "mode": "chat",
+                },
+                "gemini/gemini-1.5-pro": {
+                    "max_tokens": 8192,
+                    "input_cost_per_token": 0.00000125,
+                    "output_cost_per_token": 0.000005,
+                    "litellm_provider": "gemini",
+                    "mode": "chat",
+                },
+            })
+        except Exception:
+            pass
         _completion_fn = litellm.completion
     return _completion_fn
 
@@ -286,13 +311,20 @@ def execute_with_retry(api_call_func, max_attempts: int = 4):
 
 
 _GEMINI_FALLBACK_MODELS = (
+    "gemini/gemini-2.0-flash",
+    "gemini/gemini-1.5-flash",
     "gemini/gemini-flash-latest",
-    "gemini/gemini-3-flash-preview",
     "gemini/gemini-2.5-flash",
+    "gemini/gemini-1.5-pro",
 )
 
 
-def resolve_model_id(model_choice: str, local_model_name: str = None, model_override: str = "") -> str:
+def resolve_model_id(
+    model_choice: str,
+    local_model_name: str = None,
+    model_override: str = "",
+    api_key: str = "",
+) -> str:
     override = (model_override or "").strip()
     if not override:
         try:
@@ -305,7 +337,24 @@ def resolve_model_id(model_choice: str, local_model_name: str = None, model_over
             override = ""
 
     if "Gemini" in model_choice:
-        return f"gemini/{override or 'gemini-flash-latest'}"
+        if override:
+            return f"gemini/{override}"
+        # Inspect key signature to choose between public production and dev preview models
+        key_candidate = (api_key or "").strip().strip("'\"")
+        if not key_candidate:
+            try:
+                import streamlit as st
+                key_candidate = (st.session_state.get("user_api_key") or "").strip().strip("'\"")
+            except Exception:
+                pass
+        if not key_candidate:
+            key_candidate = os.environ.get("USER_API_KEY", "").strip().strip("'\"")
+
+        # Developer tokens (Antigravity CLI internal) route to gemini-flash-latest
+        if key_candidate.startswith("AQ.") or key_candidate.startswith("AQ"):
+            return "gemini/gemini-flash-latest"
+        # Standard public Google AI Studio keys (AIzaSy...) and all other keys route to public gemini-2.0-flash
+        return "gemini/gemini-2.0-flash"
     elif "OpenAI" in model_choice or "ChatGPT" in model_choice:
         return f"openai/{override or 'gpt-4o-mini'}"
     elif "Grok" in model_choice:
@@ -356,7 +405,8 @@ def call_unified_llm(
 ):
     if timeout is None:
         timeout = 300 if "Local" in (model_choice or "") else 45
-    target_model = resolve_model_id(model_choice, local_model_name, model_override)
+    clean_key = (api_key or "").strip().strip("'\"")
+    target_model = resolve_model_id(model_choice, local_model_name, model_override, api_key=clean_key)
     
     messages = []
     if system_prompt:
@@ -366,7 +416,7 @@ def call_unified_llm(
     kwargs = {
         "model": target_model,
         "messages": messages,
-        "api_key": api_key or "not-needed",
+        "api_key": clean_key or "not-needed",
         "timeout": timeout,
         "drop_params": True,
     }
@@ -385,7 +435,16 @@ def call_unified_llm(
         return execute_with_retry(lambda: completion_fn(**kwargs))
     except Exception as first_err:
         err_low = str(first_err).lower()
-        is_model_unavailable = "404" in err_low or "notfound" in err_low or "no longer available" in err_low or "not found" in err_low
+        is_model_unavailable = (
+            "404" in err_low
+            or "notfound" in err_low
+            or "no longer available" in err_low
+            or "not found" in err_low
+            or "not supported" in err_low
+            or "unsupported" in err_low
+            or "api_key_invalid" in err_low
+            or "invalid_argument" in err_low
+        )
         if "Gemini" in (model_choice or "") and not (model_override or "").strip() and is_model_unavailable:
             for candidate in _GEMINI_FALLBACK_MODELS:
                 if candidate == target_model:
