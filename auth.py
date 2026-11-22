@@ -478,7 +478,8 @@ def _clear_legacy_session_query_param() -> None:
 
 
 def sync_session_cookie() -> None:
-    """Flushes any queued cookie set/clear operation to the browser via a hidden same-origin iframe."""
+    """Flushes any queued cookie set/clear operation to the browser inside a fixed placeholder slot."""
+    cookie_slot = st.empty()
     action = st.session_state.pop("_auth_cookie_action", None)
     if not action:
         return
@@ -502,7 +503,7 @@ def sync_session_cookie() -> None:
             f"targetDoc.cookie = name + '=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax' + sec;"
         )
     try:
-        st.iframe(
+        cookie_slot.iframe(
             f"<!DOCTYPE html><html><body style='margin:0;padding:0;overflow:hidden;'><script>"
             f"(function(){{ try {{ {js_body} }} catch (e) {{}} }})();"
             f"</script></body></html>",

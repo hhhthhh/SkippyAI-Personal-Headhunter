@@ -1245,13 +1245,8 @@ def setup_sidebar():
     )
     st.session_state["model_choice"] = st.session_state["sb_model_choice_select"]
 
-    def confirm_api_key():
-        new_key = (st.session_state.get("temp_api_key_input") or "").strip().strip("'\"")
-        if new_key and new_key != st.session_state.get("user_api_key", ""):
-            save_local_config(new_key)
-            st.session_state["user_api_key"] = new_key
-            st.toast("Key Accepted! ✅", icon="🔑")
-
+    sb_test_clicked = False
+    sb_test_status = None
     if "Local" in st.session_state["model_choice"]:
         if "sb_local_base_url" not in st.session_state:
             st.session_state["sb_local_base_url"] = st.session_state.get("local_base_url", "http://localhost:11434/v1")
@@ -1287,25 +1282,17 @@ def setup_sidebar():
             "Enter API Key", 
             type="password", 
             key="temp_api_key_input",
-            on_change=confirm_api_key,
+            on_change="ignore",
             help="Works seamlessly with the selected provider."
         ) or "").strip().strip("'\"")
         
         if updated_key and updated_key != current_key:
             save_local_config(updated_key)
             st.session_state["user_api_key"] = updated_key
+            st.toast("Key Accepted! ✅", icon="🔑")
 
-        if st.sidebar.button("🧪 Test Connection", key="btn_sb_test_key", width="stretch"):
-            val = (st.session_state.get("temp_api_key_input") or "").strip().strip("'\"")
-            if val:
-                save_local_config(val)
-                st.session_state["user_api_key"] = val
-            with st.sidebar.spinner("Testing..."):
-                ok, msg = test_ai_connection(st.session_state["model_choice"], val)
-                if ok:
-                    st.sidebar.success("Connected! ✅")
-                else:
-                    st.sidebar.error(f"❌ {msg[:120]}")
+        sb_test_clicked = st.sidebar.button("🧪 Test Connection", key="btn_sb_test_key", width="stretch")
+        sb_test_status = st.sidebar.empty()
 
         with st.sidebar.expander("⚙️ Advanced Settings"):
             if "sb_model_override" not in st.session_state:
@@ -1327,6 +1314,18 @@ def setup_sidebar():
     render_prompt_mode_toggle(in_sidebar=True)
     render_help_section(in_sidebar=True)
     render_sidebar_auth_controls()
+
+    if sb_test_clicked and sb_test_status is not None:
+        val = (st.session_state.get("temp_api_key_input") or "").strip().strip("'\"")
+        if val:
+            save_local_config(val)
+            st.session_state["user_api_key"] = val
+        sb_test_status.info("⏳ Testing connection...")
+        ok, msg = test_ai_connection(st.session_state["model_choice"], val)
+        if ok:
+            sb_test_status.success("Connected! ✅")
+        else:
+            sb_test_status.error(f"❌ {msg[:120]}")
 
 def enforce_onboarding():
     enforce_authentication()
@@ -1386,84 +1385,113 @@ def enforce_onboarding():
         local_base = st.session_state.get("local_base_url", "http://localhost:11434/v1")
         local_model = st.session_state.get("local_model_name", "llama3")
 
-        if selected_model == "Google Gemini":
-            st.info(
-                "💡 **Google Gemini is free to use** with no credit card required. "
-                "[Click here to get your free Gemini API key from Google AI Studio ↗](https://aistudio.google.com/app/apikey)",
-                icon="✨"
-            )
-            api_key_input = st.text_input(
-                "Enter Google Gemini API Key",
-                value=api_key_val,
-                type="password",
-                key="onboarding_gemini_api_key_input",
-                help="Get a free key from Google AI Studio (takes 30 seconds, no credit card required)."
-            )
-        elif selected_model == "Local / Custom (Ollama)":
-            st.info(
-                "💻 **100% Private & Offline**: Requires [Ollama](https://ollama.com) running on your computer. "
-                "In your terminal, start your model with: `ollama run llama3`",
-                icon="🖥️"
-            )
-            c_url, c_mod = st.columns(2)
-            with c_url:
-                local_base = st.text_input("Local API Base URL", value=local_base, key="onboarding_local_base_url_input")
-            with c_mod:
-                local_model = st.text_input("Local Model Name", value=local_model, key="onboarding_local_model_name_input")
-            api_key_input = ""
-        else:
-            provider_slug = selected_model.replace(" ", "_").lower()
-            api_key_input = st.text_input(
-                f"Enter {selected_model} API Key",
-                value=api_key_val,
-                type="password",
-                key=f"onboarding_{provider_slug}_api_key_input",
-                help=f"Enter your API key for {selected_model}."
-            )
+        with st.container():
+            if selected_model == "Google Gemini":
+                st.info(
+                    "💡 **Google Gemini is recommended**. "
+                    "[Click here to get your Gemini API key from Google AI Studio ↗](https://aistudio.google.com/app/apikey)",
+                    icon="✨"
+                )
+                api_key_input = st.text_input(
+                    "Enter Google Gemini API Key",
+                    value=api_key_val,
+                    type="password",
+                    key="onboarding_gemini_api_key_input",
+                    on_change="ignore",
+                    help="Get a free key from Google AI Studio (takes 30 seconds, no credit card required)."
+                )
+            elif selected_model == "Local / Custom (Ollama)":
+                st.info(
+                    "💻 **100% Private & Offline**: Requires [Ollama](https://ollama.com) running on your computer. "
+                    "In your terminal, start your model with: `ollama run llama3`",
+                    icon="🖥️"
+                )
+                c_url, c_mod = st.columns(2)
+                with c_url:
+                    local_base = st.text_input(
+                        "Local API Base URL",
+                        value=local_base,
+                        key="onboarding_local_base_url_input",
+                        on_change="ignore",
+                    )
+                with c_mod:
+                    local_model = st.text_input(
+                        "Local Model Name",
+                        value=local_model,
+                        key="onboarding_local_model_name_input",
+                        on_change="ignore",
+                    )
+                api_key_input = ""
+            else:
+                provider_slug = selected_model.replace(" ", "_").lower()
+                api_key_input = st.text_input(
+                    f"Enter {selected_model} API Key",
+                    value=api_key_val,
+                    type="password",
+                    key=f"onboarding_{provider_slug}_api_key_input",
+                    on_change="ignore",
+                    help=f"Enter your API key for {selected_model}."
+                )
 
         clean_input_key = (api_key_input or "").strip().strip("'\"")
 
         col_test, col_save = st.columns([1, 1.4])
         with col_test:
-            if st.button("🧪 Test Connection", type="secondary", width="stretch"):
-                with st.spinner("Testing AI connection..."):
-                    test_key = clean_input_key if selected_model != "Local / Custom (Ollama)" else ""
-                    ok, msg = test_ai_connection(
-                        selected_model,
-                        test_key,
-                        local_base_url=local_base,
-                        local_model_name=local_model
-                    )
-                    if ok:
-                        st.success(f"✅ {msg}")
-                    else:
-                        st.error(f"❌ {msg}")
-
+            test_clicked = st.button(
+                "🧪 Test Connection",
+                key="btn_onboarding_test_connection",
+                type="secondary",
+                width="stretch",
+            )
         with col_save:
-            if st.button("Save & Continue ➔", type="primary", width="stretch"):
-                st.session_state["model_choice"] = selected_model
-                st.session_state["sb_model_choice_select"] = selected_model
-                set_setting("model_choice", selected_model)
-                if selected_model == "Local / Custom (Ollama)":
-                    set_setting("local_base_url", local_base)
-                    set_setting("local_model_name", local_model)
-                    st.session_state["local_base_url"] = local_base
-                    st.session_state["local_model_name"] = local_model
-                    st.session_state["sb_local_base_url"] = local_base
-                    st.session_state["sb_local_model_name"] = local_model
-                    st.session_state["show_key_success"] = True
-                    st.rerun()
-                else:
-                    if clean_input_key:
-                        save_local_config(clean_input_key)
-                        st.session_state["user_api_key"] = clean_input_key
-                        st.session_state["show_key_success"] = True
-                        st.rerun()
-                    else:
-                        st.warning("Please enter a valid API key to continue.")
+            save_clicked = st.button(
+                "Save & Continue ➔",
+                key="btn_onboarding_save_continue",
+                type="primary",
+                width="stretch",
+            )
+
+        status_slot = st.empty()
 
         st.markdown("---")
         render_help_section(in_sidebar=False)
+
+        if test_clicked:
+            status_slot.info("⏳ Testing AI connection...")
+            test_key = clean_input_key if selected_model != "Local / Custom (Ollama)" else ""
+            ok, msg = test_ai_connection(
+                selected_model,
+                test_key,
+                local_base_url=local_base,
+                local_model_name=local_model,
+            )
+            if ok:
+                status_slot.success(f"✅ {msg}")
+            else:
+                status_slot.error(f"❌ {msg}")
+
+        if save_clicked:
+            st.session_state["model_choice"] = selected_model
+            st.session_state["sb_model_choice_select"] = selected_model
+            set_setting("model_choice", selected_model)
+            if selected_model == "Local / Custom (Ollama)":
+                set_setting("local_base_url", local_base)
+                set_setting("local_model_name", local_model)
+                st.session_state["local_base_url"] = local_base
+                st.session_state["local_model_name"] = local_model
+                st.session_state["sb_local_base_url"] = local_base
+                st.session_state["sb_local_model_name"] = local_model
+                st.session_state["show_key_success"] = True
+                st.rerun()
+            else:
+                if clean_input_key:
+                    save_local_config(clean_input_key)
+                    st.session_state["user_api_key"] = clean_input_key
+                    st.session_state["show_key_success"] = True
+                    st.rerun()
+                else:
+                    status_slot.warning("Please enter a valid API key to continue.")
+
         st.stop()
 
     # =========================================================================

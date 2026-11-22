@@ -68,7 +68,7 @@ if (show_quick_start or not has_evaluated_jobs) and not dismissed:
             st.caption("Skippy checks your qualifications across 4 dimensions and spots red flags or dealbreakers upfront.")
         with c3:
             st.markdown("##### 3. Get Your Pack")
-            st.caption("In **Job History**, download your fact-checked ATS resume, custom cover letter, and STAR interview prep.")
+            st.caption("In **Evaluations**, generate and download your fact-checked ATS resume, custom cover letter, STAR interview prep and more!")
 
     st.markdown("---")
 

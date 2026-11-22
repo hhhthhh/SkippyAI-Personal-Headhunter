@@ -1,6 +1,12 @@
 [server]
 fileWatcherType = "none"
 
+[client]
+toolbarMode = "viewer"
+
+[logger]
+hideWelcomeMessage = true
+
 [theme]
 base = "dark"
 primaryColor = "#2563eb"

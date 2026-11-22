@@ -10,12 +10,16 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 # Copy the requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Install Python dependencies and Playwright Chromium with OS dependencies
-RUN pip install --no-cache-dir --upgrade pip \
+# Install libatomic1 (required by Playwright's bundled Node runtime on slim images),
+# Python dependencies, and Playwright Chromium with OS dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 \
+    && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir --default-timeout=120 --retries=5 -r requirements.txt \
     && mkdir -p /ms-playwright \
     && playwright install --with-deps chromium \
-    && chmod -R 755 /ms-playwright
+    && chmod -R 755 /ms-playwright \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy the rest of the application files (.env, skippy.db, and resume.md are excluded via .dockerignore)
 COPY . .
