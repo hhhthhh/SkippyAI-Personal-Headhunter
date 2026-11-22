@@ -1,10 +1,7 @@
 import re
-import importlib
-from datetime import datetime
 import streamlit as st
 import pandas as pd
 from collections import Counter, defaultdict
-import plotly.graph_objects as go
 import database as db
 from evaluator import generate_upskill_roadmap, generate_docx_from_markdown
 
@@ -292,7 +289,7 @@ def classify_red_flag(flag_text: str) -> str:
 from sankey_utils import (
     parse_date_safely,
     compute_sankey_data,
-    build_sankey_figure,
+    build_sankey_echarts_spec,
     render_sankey_section,
     generate_safe_job_key,
 )
@@ -300,13 +297,22 @@ from sankey_utils import (
 
 def render_market_skills_section(history_data: list[dict], total_jobs: int):
     """Renders market intelligence, skills charts, and red flags."""
-    eligible_jobs = sum(1 for item in history_data if item.get("Eligible", True))
-    avg_score = sum(item.get("Score", 0) for item in history_data) / total_jobs if total_jobs > 0 else 0
+    eligible_items = [item for item in history_data if item.get("Eligible", True)]
+    eligible_jobs = len(eligible_items)
+    avg_score = (
+        sum(int(item.get("Score", 0) or 0) for item in eligible_items) / eligible_jobs
+        if eligible_jobs > 0
+        else 0.0
+    )
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Postings Analyzed", total_jobs)
     col2.metric("Eligible Matches", eligible_jobs)
-    col3.metric("Average Alignment Score", f"{avg_score:.1f} / 100")
+    col3.metric(
+        "Average Alignment Score",
+        f"{avg_score:.1f} / 100",
+        help="Weighted average alignment score across eligible matches (excluding disqualified 0-score roles).",
+    )
 
     sub_scored_jobs = [
         item for item in history_data
@@ -527,7 +533,7 @@ def render_upskill_section(history_data: list[dict]):
                 with dl_col:
                     st.download_button(
                         "📥 Download Learning Plan (.docx)",
-                        data=generate_docx_from_markdown(roadmap_val),
+                        data=lambda: generate_docx_from_markdown(roadmap_val),
                         file_name="Skippy_Personalized_Learning_Plan.docx",
                         type="primary",
                         width="stretch",

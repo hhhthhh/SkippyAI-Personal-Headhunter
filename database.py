@@ -140,7 +140,7 @@ def set_env_var_safe(key: str, value: str, env_file: str = ".env") -> None:
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(_resolve_db_path(), timeout=30.0, check_same_thread=False)
     try:
-        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute("PRAGMA busy_timeout=30000;")
     except sqlite3.OperationalError:
         pass
     return conn
@@ -239,7 +239,8 @@ def init_db():
                 "adapted_prompt" TEXT DEFAULT "",
                 "updated_at" TEXT DEFAULT "",
                 "ai_synthesized" INTEGER DEFAULT 0,
-                "rubric_focus" TEXT DEFAULT ""
+                "rubric_focus" TEXT DEFAULT "",
+                "excluded_skills_json" TEXT DEFAULT "[]"
             )
         ''')
 
@@ -278,6 +279,7 @@ def init_db():
             ("user_profile", "ai_synthesized", 'ALTER TABLE user_profile ADD COLUMN "ai_synthesized" INTEGER DEFAULT 0'),
             ("user_profile", "rubric_focus", 'ALTER TABLE user_profile ADD COLUMN "rubric_focus" TEXT DEFAULT ""'),
             ("user_profile", "custom_skills_json", 'ALTER TABLE user_profile ADD COLUMN "custom_skills_json" TEXT DEFAULT "[]"'),
+            ("user_profile", "excluded_skills_json", 'ALTER TABLE user_profile ADD COLUMN "excluded_skills_json" TEXT DEFAULT "[]"'),
         ]
         for tbl, col, stmt in migrations:
             cols = existing_prof_cols if tbl == "user_profile" else existing_job_cols
@@ -389,8 +391,8 @@ def save_user_profile(profile_data: dict) -> bool:
                     "id", "primary_domain", "secondary_domain", "primary_title", "secondary_title",
                     "archetype_title", "archetype_description", "scores_json", "keywords_json",
                     "custom_skills_json", "search_queries_json", "compliance_gates_json",
-                    "adapted_prompt", "updated_at", "ai_synthesized", "rubric_focus"
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    "adapted_prompt", "updated_at", "ai_synthesized", "rubric_focus", "excluded_skills_json"
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT("id") DO UPDATE SET
                     "primary_domain" = excluded."primary_domain",
                     "secondary_domain" = excluded."secondary_domain",
@@ -406,7 +408,8 @@ def save_user_profile(profile_data: dict) -> bool:
                     "adapted_prompt" = excluded."adapted_prompt",
                     "updated_at" = excluded."updated_at",
                     "ai_synthesized" = excluded."ai_synthesized",
-                    "rubric_focus" = excluded."rubric_focus"
+                    "rubric_focus" = excluded."rubric_focus",
+                    "excluded_skills_json" = excluded."excluded_skills_json"
             ''', (
                 "default_user",
                 profile_data.get("primary_domain", ""),
@@ -423,7 +426,8 @@ def save_user_profile(profile_data: dict) -> bool:
                 profile_data.get("adapted_prompt", ""),
                 now_ts,
                 1 if profile_data.get("ai_synthesized") else 0,
-                profile_data.get("rubric_focus", "")
+                profile_data.get("rubric_focus", ""),
+                json.dumps(profile_data.get("excluded_skills", []))
             ))
         return True
     except Exception as e:
@@ -431,6 +435,17 @@ def save_user_profile(profile_data: dict) -> bool:
         return False
     finally:
         conn.close()
+
+
+def _has_valid_profile_data(data: any) -> bool:
+    """Returns True only when a profile dict contains a real title or domain (ignores empty `{}` Docker stubs)."""
+    if not isinstance(data, dict):
+        return False
+    return bool(
+        str(data.get("industry_title") or "").strip()
+        or str(data.get("archetype_title") or "").strip()
+        or str(data.get("primary_domain") or "").strip()
+    )
 
 
 def load_user_profile() -> dict | None:
@@ -463,6 +478,7 @@ def load_user_profile() -> dict | None:
                 "updated_at": d.get("updated_at", ""),
                 "ai_synthesized": bool(d.get("ai_synthesized", 0)),
                 "rubric_focus": d.get("rubric_focus", ""),
+                "excluded_skills": json.loads(d["excluded_skills_json"]) if "excluded_skills_json" in d.keys() and d["excluded_skills_json"] else [],
             }
     except Exception as e:
         print(f"[Database Warning] Profile load from DB failed, trying JSON fallback: {e}")
@@ -473,8 +489,9 @@ def load_user_profile() -> dict | None:
         try:
             with open(PROFILE_JSON_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, dict):
+                if _has_valid_profile_data(data):
                     data.setdefault("custom_skills", [])
+                    data.setdefault("excluded_skills", [])
                     # Self-heal SQLite database if row was missing or cleared
                     try:
                         save_user_profile(data)
@@ -555,31 +572,36 @@ def set_setting(key: str, value: str) -> bool:
 def is_onboarding_completed() -> bool:
     """
     Returns True if onboarding was previously marked completed,
-    or if user has existing resumes, profile, or job records.
+    or if user has existing profile or job records.
     Automatically marks onboarding completed if existing data is detected.
     """
     flag = get_setting("onboarding_completed", "")
     if flag.lower() in ("true", "1", "yes"):
         return True
+    if flag.lower() in ("false", "0", "no"):
+        return False
 
-    # Retroactive detection: if user already has resumes, profile, or jobs, auto-mark completed
+    # Retroactive detection for existing users: profile or jobs present
     try:
-        if os.path.exists("resumes.json"):
-            with open("resumes.json", "r", encoding="utf-8") as f:
-                rdata = json.load(f)
-                if isinstance(rdata, dict) and any(str(v).strip() for v in rdata.values()):
+        prof_file = globals().get("PROFILE_JSON_FILE", "profile_alignment.json")
+        if os.path.exists(prof_file):
+            try:
+                with open(prof_file, "r", encoding="utf-8") as pf:
+                    prof_data = json.load(pf)
+                if _has_valid_profile_data(prof_data):
                     mark_onboarding_completed()
                     return True
-        if os.path.exists("resume.md") and os.path.getsize("resume.md") > 20:
-            mark_onboarding_completed()
-            return True
-        if os.path.exists("profile_alignment.json") and os.path.getsize("profile_alignment.json") > 20:
-            mark_onboarding_completed()
-            return True
+            except Exception:
+                pass
         conn = get_connection()
         try:
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) FROM jobs")
+            row = cur.fetchone()
+            if row and row[0] > 0:
+                mark_onboarding_completed()
+                return True
+            cur.execute("SELECT COUNT(*) FROM user_profile WHERE archetype_title != ''")
             row = cur.fetchone()
             if row and row[0] > 0:
                 mark_onboarding_completed()
@@ -704,13 +726,13 @@ def load_seen_job_identifiers() -> tuple[set, set]:
     return normalized_urls, linkedin_ids
 
 
-def record_seen_postings(postings: list[dict]) -> None:
-    """Persists a batch of discovered postings to `seen_postings`."""
+def record_seen_postings(postings: list[dict]) -> bool:
+    """Persists a batch of discovered postings to `seen_postings`. Returns True on success."""
     if not postings:
-        return
-    conn = get_connection()
+        return True
+    conn = None
     try:
-        cursor = conn.cursor()
+        conn = get_connection()
         now_ts = datetime.now().isoformat()
         records = []
         for p in postings:
@@ -731,17 +753,20 @@ def record_seen_postings(postings: list[dict]) -> None:
                 str(p.get("source_board") or p.get("source") or ""),
                 now_ts
             ))
-        cursor.executemany('''
-            INSERT OR REPLACE INTO seen_postings
-            ("id", "url", "title", "company", "location", "date", "source", "seen_at")
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', records)
-        conn.commit()
+        with conn:
+            conn.executemany('''
+                INSERT OR REPLACE INTO seen_postings
+                ("id", "url", "title", "company", "location", "date", "source", "seen_at")
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', records)
         clear_repost_cache()
+        return True
     except Exception as e:
         print(f"[Database Error] Failed to record seen postings: {e}")
+        return False
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def clear_seen_postings() -> None:
@@ -790,10 +815,11 @@ def classify_posting(
     return "new"
 
 
-def save_scraper_results(postings: list[dict], source_label: str = "", clear_existing: bool = False) -> None:
-    """Persists or appends active scraper results to `scraper_results`."""
-    conn = get_connection()
+def save_scraper_results(postings: list[dict], source_label: str = "", clear_existing: bool = False) -> bool:
+    """Persists or appends active scraper results to `scraper_results`. Returns True on success."""
+    conn = None
     try:
+        conn = get_connection()
         now_ts = datetime.now().isoformat()
         records = []
         for p in postings:
@@ -839,10 +865,13 @@ def save_scraper_results(postings: list[dict], source_label: str = "", clear_exi
                     END
             ''', records)
         clear_repost_cache()
+        return True
     except Exception as e:
         print(f"[Database Error] Failed to save scraper results: {e}")
+        return False
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def load_scraper_results() -> list[dict]:
@@ -925,72 +954,71 @@ def save_job_result(match_data):
     """
     conn = get_connection()
     try:
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO jobs (
-                "Timestamp", "Position", "Company", "Deadline", "URL",
-                "Eligible", "Disqualification Reason", "Score",
-                "Technical Score", "Experience Score", "Behavioral Score", "Career Score",
-                "Location Gate", "Eligibility Gate",
-                "Summary", "Matching Skills", "Missing Skills", "Red Flags",
-                "Job Text", "Application Status", "Matched Resumes", "Source"
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT("URL") DO UPDATE SET
-                "Timestamp" = excluded."Timestamp",
-                "Position" = excluded."Position",
-                "Company" = CASE WHEN excluded."Company" != '' THEN excluded."Company" ELSE jobs."Company" END,
-                "Deadline" = CASE WHEN excluded."Deadline" != '' THEN excluded."Deadline" ELSE jobs."Deadline" END,
-                "Eligible" = excluded."Eligible",
-                "Disqualification Reason" = excluded."Disqualification Reason",
-                "Score" = excluded."Score",
-                "Technical Score" = excluded."Technical Score",
-                "Experience Score" = excluded."Experience Score",
-                "Behavioral Score" = excluded."Behavioral Score",
-                "Career Score" = excluded."Career Score",
-                "Location Gate" = excluded."Location Gate",
-                "Eligibility Gate" = excluded."Eligibility Gate",
-                "Summary" = excluded."Summary",
-                "Matching Skills" = excluded."Matching Skills",
-                "Missing Skills" = excluded."Missing Skills",
-                "Red Flags" = excluded."Red Flags",
-                "Job Text" = excluded."Job Text",
-                "Application Status" = CASE
-                    WHEN jobs."Application Status" IS NOT NULL
-                         AND jobs."Application Status" != ''
-                         AND jobs."Application Status" != 'Not Applied'
-                    THEN jobs."Application Status"
-                    ELSE excluded."Application Status"
-                END,
-                "Matched Resumes" = CASE
-                    WHEN excluded."Matched Resumes" != '' THEN excluded."Matched Resumes"
-                    ELSE jobs."Matched Resumes"
-                END,
-                "Source" = excluded."Source"
-        ''', (
-            match_data.get("Timestamp"),
-            match_data.get("Position"),
-            match_data.get("Company", ""),
-            match_data.get("Deadline", ""),
-            match_data.get("URL"),
-            match_data.get("Eligible"),
-            match_data.get("Disqualification Reason"),
-            int(match_data.get("Score") or 0),
-            int(match_data.get("Technical Score") or 0),
-            int(match_data.get("Experience Score") or 0),
-            int(match_data.get("Behavioral Score") or 0),
-            int(match_data.get("Career Score") or 0),
-            match_data.get("Location Gate", "PASS"),
-            match_data.get("Eligibility Gate", "PASS"),
-            match_data.get("Summary"),
-            match_data.get("Matching Skills"),
-            match_data.get("Missing Skills"),
-            match_data.get("Red Flags"),
-            match_data.get("Job Text"),
-            match_data.get("Application Status", "Not Applied"),
-            match_data.get("Matched Resumes", ""),
-            match_data.get("Source", "Manual")
-        ))
-        conn.commit()
+        with conn:
+            conn.execute('''
+                INSERT INTO jobs (
+                    "Timestamp", "Position", "Company", "Deadline", "URL",
+                    "Eligible", "Disqualification Reason", "Score",
+                    "Technical Score", "Experience Score", "Behavioral Score", "Career Score",
+                    "Location Gate", "Eligibility Gate",
+                    "Summary", "Matching Skills", "Missing Skills", "Red Flags",
+                    "Job Text", "Application Status", "Matched Resumes", "Source"
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT("URL") DO UPDATE SET
+                    "Timestamp" = excluded."Timestamp",
+                    "Position" = excluded."Position",
+                    "Company" = CASE WHEN excluded."Company" != '' THEN excluded."Company" ELSE jobs."Company" END,
+                    "Deadline" = CASE WHEN excluded."Deadline" != '' THEN excluded."Deadline" ELSE jobs."Deadline" END,
+                    "Eligible" = excluded."Eligible",
+                    "Disqualification Reason" = excluded."Disqualification Reason",
+                    "Score" = excluded."Score",
+                    "Technical Score" = excluded."Technical Score",
+                    "Experience Score" = excluded."Experience Score",
+                    "Behavioral Score" = excluded."Behavioral Score",
+                    "Career Score" = excluded."Career Score",
+                    "Location Gate" = excluded."Location Gate",
+                    "Eligibility Gate" = excluded."Eligibility Gate",
+                    "Summary" = excluded."Summary",
+                    "Matching Skills" = excluded."Matching Skills",
+                    "Missing Skills" = excluded."Missing Skills",
+                    "Red Flags" = excluded."Red Flags",
+                    "Job Text" = excluded."Job Text",
+                    "Application Status" = CASE
+                        WHEN jobs."Application Status" IS NOT NULL
+                             AND jobs."Application Status" != ''
+                             AND jobs."Application Status" != 'Not Applied'
+                        THEN jobs."Application Status"
+                        ELSE excluded."Application Status"
+                    END,
+                    "Matched Resumes" = CASE
+                        WHEN excluded."Matched Resumes" != '' THEN excluded."Matched Resumes"
+                        ELSE jobs."Matched Resumes"
+                    END,
+                    "Source" = excluded."Source"
+            ''', (
+                match_data.get("Timestamp"),
+                match_data.get("Position"),
+                match_data.get("Company", ""),
+                match_data.get("Deadline", ""),
+                match_data.get("URL"),
+                match_data.get("Eligible"),
+                match_data.get("Disqualification Reason"),
+                int(match_data.get("Score") or 0),
+                int(match_data.get("Technical Score") or 0),
+                int(match_data.get("Experience Score") or 0),
+                int(match_data.get("Behavioral Score") or 0),
+                int(match_data.get("Career Score") or 0),
+                match_data.get("Location Gate", "PASS"),
+                match_data.get("Eligibility Gate", "PASS"),
+                match_data.get("Summary"),
+                match_data.get("Matching Skills"),
+                match_data.get("Missing Skills"),
+                match_data.get("Red Flags"),
+                match_data.get("Job Text"),
+                match_data.get("Application Status", "Not Applied"),
+                match_data.get("Matched Resumes", ""),
+                match_data.get("Source", "Manual")
+            ))
         clear_repost_cache()
     finally:
         conn.close()
@@ -1059,6 +1087,56 @@ def update_job_field(url: str, field: str, value: str, max_retries: int = 3) -> 
     return False
 
 
+def _parse_doc_audits_map(raw_audit: str) -> dict[str, str]:
+    """Parses the `Reviewer Audit` column into a per-document-type mapping (backward-compatible with plain Markdown)."""
+    text = str(raw_audit or "").strip()
+    if not text or text.lower() == "nan":
+        return {}
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return {str(k): str(v) for k, v in parsed.items() if v and str(v).strip()}
+        except (ValueError, TypeError):
+            pass
+    first_line = text.splitlines()[0].lower() if text.splitlines() else ""
+    inferred_key = "Cover Letter" if "cover letter" in first_line else "Tailored Resume"
+    return {inferred_key: text}
+
+
+def get_doc_audit(raw_audit: str, doc_type: str) -> str:
+    """Returns the fact-check audit report for a specific document type (`Tailored Resume` or `Cover Letter`)."""
+    return _parse_doc_audits_map(raw_audit).get(doc_type, "")
+
+
+def set_doc_audit(raw_audit: str, doc_type: str, audit_md: str) -> str:
+    """Updates or clears the fact-check audit report for `doc_type` while preserving other document audits."""
+    mapping = _parse_doc_audits_map(raw_audit)
+    clean_md = str(audit_md or "").strip()
+    if clean_md:
+        mapping[doc_type] = clean_md
+    else:
+        mapping.pop(doc_type, None)
+    if not mapping:
+        return ""
+    return json.dumps(mapping, ensure_ascii=False)
+
+
+def format_all_doc_audits(raw_audit: str) -> str:
+    """Formats a stored `Reviewer Audit` column (JSON map or legacy plain Markdown) into readable Markdown."""
+    mapping = _parse_doc_audits_map(raw_audit)
+    if not mapping:
+        return ""
+    ordered = []
+    for k in ("Tailored Resume", "Cover Letter"):
+        if k in mapping:
+            ordered.append(mapping[k])
+    for k, v in mapping.items():
+        if k not in ("Tailored Resume", "Cover Letter"):
+            ordered.append(v)
+    return "\n\n---\n\n".join(ordered)
+
+
 def parse_date_safely(ts_str: any) -> datetime | None:
     """Robustly parses timestamps across diverse ISO and human-readable formats."""
     if not ts_str or not isinstance(ts_str, str):
@@ -1105,12 +1183,21 @@ def _extract_title_tokens(title: str) -> set[str]:
     return words - _TITLE_STOPWORDS
 
 
-@lru_cache(maxsize=1)
+_COMPANY_POSTING_INDEX_CACHE: dict[str, list[dict]] | None = None
+
+
 def _load_company_posting_index() -> dict[str, list[dict]]:
-    """Loads all lightweight posting metadata once and indexes by lowercase company name."""
+    """Loads all lightweight posting metadata once and indexes by lowercase company name.
+    Only caches successful reads so transient database errors never poison repost detection.
+    """
+    global _COMPANY_POSTING_INDEX_CACHE
+    if _COMPANY_POSTING_INDEX_CACHE is not None:
+        return _COMPANY_POSTING_INDEX_CACHE
+
     index: dict[str, list[dict]] = {}
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
@@ -1158,11 +1245,14 @@ def _load_company_posting_index() -> dict[str, list[dict]]:
                     "date_str": (r["date"] or "") or (r["seen_at"] or ""),
                     "status": "Discovered",
                 })
+        _COMPANY_POSTING_INDEX_CACHE = index
+        return index
     except Exception as e:
         print(f"[Database Error] _load_company_posting_index query failed: {e}")
+        return {}
     finally:
-        conn.close()
-    return index
+        if conn is not None:
+            conn.close()
 
 
 def detect_job_reposts(
@@ -1264,8 +1354,9 @@ def detect_job_reposts(
 
 
 def clear_repost_cache():
+    global _COMPANY_POSTING_INDEX_CACHE
+    _COMPANY_POSTING_INDEX_CACHE = None
     try:
-        _load_company_posting_index.cache_clear()
         check_repost_risk.cache_clear()
     except Exception:
         pass
@@ -1294,7 +1385,7 @@ def check_repost_risk(company: str, role: str, current_url: str = "", window_day
     }
 
 
-def get_pipeline_turnaround_metrics(stale_days: int = 14) -> dict:
+def get_pipeline_turnaround_metrics(stale_days: int = 14, jobs: list[dict] | None = None) -> dict:
     """
     Computes turnaround latencies and employer responsiveness metrics across evaluated jobs:
     - Average days to interview invite
@@ -1302,7 +1393,7 @@ def get_pipeline_turnaround_metrics(stale_days: int = 14) -> dict:
     - Fast responders (< 7 days)
     - Stale / Ghosted applications (> stale_days with no response)
     """
-    all_jobs = load_all_jobs(summary_only=True)
+    all_jobs = jobs if jobs is not None else load_all_jobs(summary_only=True)
     interview_latencies = []
     rejection_latencies = []
     ghosted_count = 0
@@ -1400,33 +1491,55 @@ def delete_jobs_by_urls(urls: list[str], keep_seen: bool = True) -> int:
     if not candidate_urls:
         return 0
 
-    placeholders = ",".join("?" for _ in candidate_urls)
-    params = tuple(candidate_urls)
+    candidate_list = list(candidate_urls)
+    chunk_size = 500
     conn = get_connection()
     matched_rows = []
     try:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute(
-            f'SELECT "URL", "Position", "Company", "Timestamp", "Source" FROM jobs WHERE "URL" IN ({placeholders})',
-            params,
-        )
-        matched_rows = [dict(r) for r in cur.fetchall()]
+        seen_exact_urls = set()
+        for i in range(0, len(candidate_list), chunk_size):
+            chunk = candidate_list[i:i + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            cur.execute(
+                f'SELECT "URL", "Position", "Company", "Timestamp", "Source" FROM jobs WHERE "URL" IN ({placeholders})',
+                tuple(chunk),
+            )
+            for r in cur.fetchall():
+                row_dict = dict(r)
+                row_url = row_dict.get("URL")
+                if row_url and row_url not in seen_exact_urls:
+                    seen_exact_urls.add(row_url)
+                    matched_rows.append(row_dict)
         if not matched_rows:
             return 0
 
         exact_urls = [r["URL"] for r in matched_rows if r.get("URL")]
-        del_placeholders = ",".join("?" for _ in exact_urls)
         target_scraper_status = "seen" if keep_seen else "new"
 
         with conn:
-            conn.execute(f'DELETE FROM jobs WHERE "URL" IN ({del_placeholders})', tuple(exact_urls))
+            for i in range(0, len(exact_urls), chunk_size):
+                chunk = exact_urls[i:i + chunk_size]
+                del_placeholders = ",".join("?" for _ in chunk)
+                conn.execute(f'DELETE FROM jobs WHERE "URL" IN ({del_placeholders})', tuple(chunk))
             for u in exact_urls:
                 lid = extract_linkedin_job_id(u)
                 norm_u = normalize_job_url(u)
+                conditions = ['"url" = ?']
+                upd_params = [target_scraper_status, u]
+                if norm_u and norm_u != u:
+                    conditions.append('"url" = ?')
+                    upd_params.append(norm_u)
+                if lid:
+                    conditions.append('"id" = ?')
+                    upd_params.append(lid)
+                if norm_u and norm_u != lid:
+                    conditions.append('"id" = ?')
+                    upd_params.append(norm_u)
                 conn.execute(
-                    'UPDATE scraper_results SET "status" = ? WHERE "url" = ? OR "id" = ? OR "id" = ?',
-                    (target_scraper_status, u, lid or "", norm_u or ""),
+                    f'UPDATE scraper_results SET "status" = ? WHERE {" OR ".join(conditions)}',
+                    tuple(upd_params),
                 )
         clear_repost_cache()
     finally:

@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   skippy:
-    build: .
+    build:
+      context: .
+      dockerfile: dockerfile
     container_name: skippy-app
     ports:
       # Restrict bindings to loopback on host to prevent unauthorized LAN/public exposure

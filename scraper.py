@@ -4,8 +4,9 @@ import random
 import re
 import socket
 import time
+from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
-from urllib.parse import urlparse, urlencode, parse_qs, urljoin
+from urllib.parse import urlparse, urlencode, urljoin
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -624,6 +625,31 @@ def _extract_guarded_text_from_html(html_content: str) -> Tuple[str, List[str]]:
     return "\n".join(lines), list(findings.get("security_flags") or [])
 
 
+def _attach_ssrf_route_guard(page) -> None:
+    """Blocks Playwright navigations and subresource requests to disallowed/private URLs before sending."""
+    if page is None or not hasattr(page, "route") or not callable(getattr(page, "route")):
+        return
+    if getattr(page, "_skippy_ssrf_guarded", False):
+        return
+
+    def _route_handler(route):
+        req_url = getattr(getattr(route, "request", None), "url", "") or ""
+        low = req_url.strip().lower()
+        if low.startswith(("data:", "blob:", "about:")):
+            route.continue_()
+            return
+        if not is_safe_url(req_url):
+            route.abort("blockedbyclient")
+            return
+        route.continue_()
+
+    try:
+        page.route("**/*", _route_handler)
+        setattr(page, "_skippy_ssrf_guarded", True)
+    except Exception:
+        pass
+
+
 def scrape_job_with_guard(url: str, page: Page = None) -> Tuple[str, List[str]]:
     """
     Scrapes a job URL and returns (cleaned_text, security_flags).
@@ -651,6 +677,7 @@ def scrape_job_with_guard(url: str, page: Page = None) -> Tuple[str, List[str]]:
     # 1. OPTIMIZED BATCH MODE: If an active Playwright page is passed, use it directly
     if page:
         try:
+            _attach_ssrf_route_guard(page)
             page.goto(url, wait_until="domcontentloaded", timeout=15000)
             current_url = getattr(page, "url", None)
             if isinstance(current_url, str) and current_url and not is_safe_url(current_url):
@@ -700,6 +727,7 @@ def scrape_job_with_guard(url: str, page: Page = None) -> Tuple[str, List[str]]:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             temp_page = browser.new_page(user_agent=headers["User-Agent"])
+            _attach_ssrf_route_guard(temp_page)
             temp_page.goto(url, wait_until="domcontentloaded", timeout=15000)
             current_url = getattr(temp_page, "url", None)
             if isinstance(current_url, str) and current_url and not is_safe_url(current_url):
@@ -736,7 +764,8 @@ def scrape_universal_search_results(search_url: str) -> list[str]:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            
+            _attach_ssrf_route_guard(page)
+
             # Tell Playwright not to wait for background analytics/ads
             page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
             current_url = getattr(page, "url", None)

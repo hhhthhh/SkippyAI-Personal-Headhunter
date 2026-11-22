@@ -85,8 +85,8 @@ else
 fi
 
 # 5. Core application files required for all target platforms
-# Includes all application logic (including auth.py, pipeline.py, posting_guard.py, career_compass.py, sample_data.py, sankey_utils.py), prompts, configuration templates, and pages.
-COMMON_FILES="app.py auth.py career_compass.py database.py evaluator.py pipeline.py posting_guard.py sample_data.py sankey_utils.py scraper.py utils.py webhook.py requirements.txt custom_prompt.template.txt prompt_presets.template.json README.md .env.example skippy_extension.zip pages/ .streamlit/"
+# Includes all application logic (including auth.py, pipeline.py, posting_guard.py, career_compass.py, sankey_utils.py), prompts, configuration templates, and pages.
+COMMON_FILES="app.py auth.py career_compass.py database.py evaluator.py pipeline.py posting_guard.py sankey_utils.py scraper.py utils.py webhook.py requirements.txt custom_prompt.template.txt prompt_presets.template.json README.md .env.example skippy_extension.zip pages/ .streamlit/"
 
 # 6. Pre-flight check: Verify all required core files exist
 echo "Verifying required application files..."

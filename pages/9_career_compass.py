@@ -1,18 +1,15 @@
 import os
 import sys
 import streamlit as st
-import plotly.graph_objects as go
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import database as db
 import career_compass
 from utils import (
-    atomic_write_text,
     get_active_prompt_details,
     set_active_prompt_mode,
     PROMPT_MODE_COMPASS,
-    PROMPT_MODE_CUSTOM,
 )
 
 st.title("🧭 Career Profile & Direction")
@@ -23,63 +20,19 @@ st.caption(
 
 profile = st.session_state.get("user_profile") or db.load_user_profile()
 
-# ---------------------------------------------------------------------------
-# AI Industry Profile Studio (Build for ANY Industry or Trade)
-# ---------------------------------------------------------------------------
-with st.container(border=True):
-    st.markdown("### 🤖 Custom Career Profile Studio (Any Trade or Field)")
-    st.caption(
-        "Working in a specialized trade, technical field, or unique industry? Enter your focus below "
-        "(or leave blank to detect it from your resume). Skippy's AI will build a tailored industry profile with "
-        "relevant skills, certifications, and scoring criteria."
-    )
-    col_input, col_btn = st.columns([3.2, 1.8], vertical_alignment="bottom")
-    with col_input:
-        niche_hint = st.text_input(
-            "🎯 Industry, Trade, or Field Focus (Optional Guidance)",
-            placeholder="e.g. Autonomous Subsea Robotics, Precision Watchmaking, Ammonia Refrigeration, Equine Sports Medicine, Museum Paper Conservation",
-            key="niche_industry_focus_input",
-            help="Specify your exact industry, craft, or specialization to guide the AI profile setup."
-        )
-    with col_btn:
-        generate_ai_arch = st.button("⚡ Generate Profile with AI", type="primary", width="stretch", key="btn_synthesize_ai_archetype")
-
-    if generate_ai_arch:
-        resume_content = st.session_state.get("resume_text", "")
-        if not resume_content.strip() and not (niche_hint and niche_hint.strip()):
-            st.warning("⚠️ Please upload a master resume in Settings or enter an industry/trade focus above so Skippy can build your industry profile.")
-        else:
-            with st.spinner("Analyzing background and building your industry profile (takes ~5–10 seconds)..."):
-                try:
-                    synth_profile = career_compass.detect_alignment_with_ai(
-                        resume_text=resume_content,
-                        industry_hint=niche_hint,
-                        model_choice=st.session_state.get("model_choice"),
-                        api_key=st.session_state.get("user_api_key")
-                    )
-                    adapted = career_compass.generate_adapted_custom_prompt(synth_profile)
-                    synth_profile["adapted_prompt"] = adapted
-                    db.save_user_profile(synth_profile)
-                    st.session_state["user_profile"] = synth_profile
-                    set_active_prompt_mode(PROMPT_MODE_COMPASS)
-                    disp_title = synth_profile.get("industry_title") or synth_profile.get("archetype_title")
-                    st.success(f"🎉 Industry Profile Created: **{disp_title}**!")
-                    st.rerun()
-                except Exception as ex:
-                    st.error(f"❌ Profile creation error: {ex}")
-
 if not profile:
-    st.info("No career alignment profile detected yet. Take the quick quiz, generate with AI above, or auto-detect from your resume below!")
+    st.info("No career alignment profile detected yet. Auto-detect from your master resume below, or take the quick quiz!")
     col_a, col_b = st.columns([1, 1])
     with col_a:
-        if st.button("⚡ Auto-Detect Career Profile from Resume", type="secondary", width="stretch"):
-            with st.spinner("Analyzing resume and detecting career alignment (takes ~5–10 seconds)..."):
+        if st.button("⚡ Quick Auto-Detect (Regex / Instant)", key="btn_initial_quick_detect", type="secondary", width="stretch", help="Fast, offline regex scan of your master resume. Instant results with zero API calls or quota usage."):
+            resume_content = st.session_state.get("resume_text", "")
+            if not resume_content.strip():
+                st.warning("⚠️ Please upload a master resume in Settings before auto-detecting.")
+            else:
                 existing_cs = (st.session_state.get("user_profile") or {}).get("custom_skills", [])
                 profile = career_compass.auto_detect_alignment_from_resume(
-                    st.session_state.get("resume_text", ""),
-                    use_ai=True,
-                    model_choice=st.session_state.get("model_choice"),
-                    api_key=st.session_state.get("user_api_key"),
+                    resume_content,
+                    use_ai=False,
                     existing_custom_skills=existing_cs
                 )
                 adapted = career_compass.generate_adapted_custom_prompt(profile)
@@ -87,8 +40,30 @@ if not profile:
                 db.save_user_profile(profile)
                 st.session_state["user_profile"] = profile
                 set_active_prompt_mode(PROMPT_MODE_COMPASS)
-                st.toast("🎯 Profile Detected & Saved!", icon="✅")
+                st.toast("⚡ Profile Detected & Saved (Instant / Regex)!", icon="✅")
                 st.rerun()
+    with col_b:
+        if st.button("🧠 Deep Analysis with AI", key="btn_initial_deep_ai_detect", type="primary", width="stretch", help="Deep analysis of your master resume using AI to build a custom industry profile (takes ~5–10 seconds)."):
+            resume_content = st.session_state.get("resume_text", "")
+            if not resume_content.strip():
+                st.warning("⚠️ Please upload a master resume in Settings before analyzing.")
+            else:
+                with st.spinner("Analyzing resume and detecting career alignment with AI (takes ~5–10 seconds)..."):
+                    existing_cs = (st.session_state.get("user_profile") or {}).get("custom_skills", [])
+                    profile = career_compass.auto_detect_alignment_from_resume(
+                        resume_content,
+                        use_ai=True,
+                        model_choice=st.session_state.get("model_choice"),
+                        api_key=st.session_state.get("user_api_key"),
+                        existing_custom_skills=existing_cs
+                    )
+                    adapted = career_compass.generate_adapted_custom_prompt(profile)
+                    profile["adapted_prompt"] = adapted
+                    db.save_user_profile(profile)
+                    st.session_state["user_profile"] = profile
+                    set_active_prompt_mode(PROMPT_MODE_COMPASS)
+                    st.toast("🎯 Profile Detected & Saved with AI!", icon="✅")
+                    st.rerun()
 
 # ---------------------------------------------------------------------------
 # Active Industry Profile Card & Visual Breakdown
@@ -129,22 +104,46 @@ if profile:
                     set_active_prompt_mode(PROMPT_MODE_COMPASS)
                     st.toast(f"🎯 Evaluator activated with {active_title} criteria!", icon="✅")
                     st.rerun()
-            if st.button("⚡ Quick Re-Detect from Resume", key="compass_redetect", width="stretch"):
-                with st.spinner("Analyzing master resume and recalibrating alignment (takes ~5–10 seconds)..."):
+            if st.button("⚡ Quick Re-Detect (Regex / Instant)", key="compass_quick_redetect", width="stretch", help="Fast, offline regex scan of your master resume across 14 industry domain vectors. Instant results, zero API calls, and preserves quota."):
+                resume_content = st.session_state.get("resume_text", "")
+                if not resume_content.strip():
+                    st.warning("⚠️ Please upload a master resume in Settings first.")
+                else:
                     updated_profile = career_compass.auto_detect_alignment_from_resume(
-                        st.session_state.get("resume_text", ""),
-                        use_ai=True,
-                        model_choice=st.session_state.get("model_choice"),
-                        api_key=st.session_state.get("user_api_key"),
-                        existing_custom_skills=profile.get("custom_skills", [])
+                        resume_content,
+                        use_ai=False,
+                        existing_custom_skills=profile.get("custom_skills", []),
+                        excluded_skills=profile.get("excluded_skills", [])
                     )
                     adapted = career_compass.generate_adapted_custom_prompt(updated_profile)
                     updated_profile["adapted_prompt"] = adapted
                     db.save_user_profile(updated_profile)
                     st.session_state["user_profile"] = updated_profile
                     set_active_prompt_mode(PROMPT_MODE_COMPASS)
-                    st.toast("Updated alignment from master resume!", icon="✅")
+                    st.toast("⚡ Fast alignment updated from master resume (Regex / Instant)!", icon="✅")
                     st.rerun()
+
+            if st.button("🧠 Deep Analysis with AI", key="compass_deep_ai_detect", width="stretch", help="Deep analysis of your master resume using AI to synthesize a custom industry profile, specialized scoring criteria, and compliance gates (takes ~5–10 seconds)."):
+                resume_content = st.session_state.get("resume_text", "")
+                if not resume_content.strip():
+                    st.warning("⚠️ Please upload a master resume in Settings first.")
+                else:
+                    with st.spinner("Analyzing master resume and recalibrating alignment with AI (takes ~5–10 seconds)..."):
+                        updated_profile = career_compass.auto_detect_alignment_from_resume(
+                            resume_content,
+                            use_ai=True,
+                            model_choice=st.session_state.get("model_choice"),
+                            api_key=st.session_state.get("user_api_key"),
+                            existing_custom_skills=profile.get("custom_skills", []),
+                            excluded_skills=profile.get("excluded_skills", [])
+                        )
+                        adapted = career_compass.generate_adapted_custom_prompt(updated_profile)
+                        updated_profile["adapted_prompt"] = adapted
+                        db.save_user_profile(updated_profile)
+                        st.session_state["user_profile"] = updated_profile
+                        set_active_prompt_mode(PROMPT_MODE_COMPASS)
+                        st.toast("🎯 Deep alignment updated from master resume with AI!", icon="✅")
+                        st.rerun()
 
     # Visual Alignment Breakdown
     scores = profile.get("scores", {})
@@ -200,28 +199,103 @@ if profile:
             st.markdown("**Your Added Skills & Tools:**")
             chips_custom = " ".join([f":violet-background[✨ **{cs}**]" for cs in custom_skills])
             st.markdown(chips_custom)
-            with st.popover("🗑️ Manage / Remove Skills", use_container_width=True):
-                st.caption("Click ✕ to remove any skill:")
-                for idx, cs in enumerate(custom_skills):
-                    r_c1, r_c2 = st.columns([3.5, 1])
-                    r_c1.markdown(f"✨ **{cs}**")
-                    if r_c2.button("✕", key=f"del_cs_{idx}_{cs}", type="secondary", use_container_width=True):
-                        new_cs = [s for s in custom_skills if s != cs]
-                        new_kw = [k for k in all_keywords if k != cs]
-                        profile["custom_skills"] = new_cs
-                        profile["keywords"] = new_kw
-                        profile["adapted_prompt"] = career_compass.generate_adapted_custom_prompt(profile)
-                        db.save_user_profile(profile)
-                        st.session_state["user_profile"] = profile
-                        st.toast(f"Removed '{cs}'", icon="🗑️")
-                        st.rerun()
 
         if industry_keywords:
-            st.markdown("**Industry Core Keywords:**")
+            st.markdown("**Generated Industry Skills & Tools:**")
             chips = " ".join([f"`{kw}`" for kw in industry_keywords])
             st.markdown(chips)
         elif not custom_skills:
             st.info("No specialized keywords assigned.")
+
+        if all_keywords:
+            with st.popover("🗑️ Manage / Remove Skills", width="stretch"):
+                st.markdown("##### 🗑️ Remove Irrelevant Skills")
+                st.caption(
+                    "Remove any generated skills or tools that are not relevant to your background. "
+                    "Removed skills will be omitted from scoring rubrics and evaluations."
+                )
+
+                # Batch removal via multi-select
+                to_remove = st.multiselect(
+                    "Select skills to remove:",
+                    options=all_keywords,
+                    key="ms_remove_skills_popover",
+                    help="Pick one or more skills to remove all at once."
+                )
+                if st.button("🗑️ Remove Selected Skills", key="btn_confirm_remove_selected_skills", type="secondary", disabled=not to_remove, width="stretch"):
+                    remove_set = {s.lower() for s in to_remove}
+                    new_kw = [k for k in all_keywords if k.lower() not in remove_set]
+                    new_cs = [s for s in custom_skills if s.lower() not in remove_set]
+                    ex_list = list(profile.get("excluded_skills", []))
+                    for item in to_remove:
+                        if not any(item.lower() == ex.lower() for ex in ex_list):
+                            ex_list.append(item)
+                    profile["keywords"] = new_kw
+                    profile["custom_skills"] = new_cs
+                    profile["excluded_skills"] = ex_list
+                    profile["adapted_prompt"] = career_compass.generate_adapted_custom_prompt(profile)
+                    db.save_user_profile(profile)
+                    st.session_state["user_profile"] = profile
+                    st.toast(f"Removed {len(to_remove)} skill(s) from your profile!", icon="🗑️")
+                    st.rerun()
+
+                st.markdown("---")
+                st.caption("Or remove individual skills:")
+                if industry_keywords:
+                    st.markdown("**Generated Profile Skills:**")
+                    for idx, ikw in enumerate(industry_keywords):
+                        r_c1, r_c2 = st.columns([3.5, 1])
+                        r_c1.markdown(f"`{ikw}`")
+                        if r_c2.button("✕", key=f"del_ikw_{idx}_{ikw}", type="secondary", width="stretch", help=f"Remove '{ikw}' from your profile"):
+                            new_kw = [k for k in all_keywords if k != ikw]
+                            ex_list = list(profile.get("excluded_skills", []))
+                            if not any(ikw.lower() == ex.lower() for ex in ex_list):
+                                ex_list.append(ikw)
+                            profile["keywords"] = new_kw
+                            profile["excluded_skills"] = ex_list
+                            profile["adapted_prompt"] = career_compass.generate_adapted_custom_prompt(profile)
+                            db.save_user_profile(profile)
+                            st.session_state["user_profile"] = profile
+                            st.toast(f"Removed '{ikw}' from profile skills!", icon="🗑️")
+                            st.rerun()
+
+                if custom_skills:
+                    st.markdown("**Your Added Skills & Tools:**")
+                    for idx, cs in enumerate(custom_skills):
+                        r_c1, r_c2 = st.columns([3.5, 1])
+                        r_c1.markdown(f"✨ **{cs}**")
+                        if r_c2.button("✕", key=f"del_cs_{idx}_{cs}", type="secondary", width="stretch", help=f"Remove '{cs}'"):
+                            new_cs = [s for s in custom_skills if s != cs]
+                            new_kw = [k for k in all_keywords if k != cs]
+                            ex_list = list(profile.get("excluded_skills", []))
+                            if not any(cs.lower() == ex.lower() for ex in ex_list):
+                                ex_list.append(cs)
+                            profile["custom_skills"] = new_cs
+                            profile["keywords"] = new_kw
+                            profile["excluded_skills"] = ex_list
+                            profile["adapted_prompt"] = career_compass.generate_adapted_custom_prompt(profile)
+                            db.save_user_profile(profile)
+                            st.session_state["user_profile"] = profile
+                            st.toast(f"Removed '{cs}'", icon="🗑️")
+                            st.rerun()
+
+                excluded = profile.get("excluded_skills", [])
+                if excluded:
+                    st.markdown("---")
+                    st.markdown("**Previously Removed Skills:**")
+                    st.caption("Click ⟲ to restore any removed skill back to your profile:")
+                    for idx, ex_s in enumerate(excluded):
+                        ex_c1, ex_c2 = st.columns([3.5, 1])
+                        ex_c1.markdown(f"~~{ex_s}~~")
+                        if ex_c2.button("⟲", key=f"restore_skill_{idx}_{ex_s}", type="secondary", width="stretch", help=f"Restore '{ex_s}'"):
+                            profile["excluded_skills"] = [s for s in excluded if s != ex_s]
+                            if ex_s not in profile["keywords"]:
+                                profile["keywords"].append(ex_s)
+                            profile["adapted_prompt"] = career_compass.generate_adapted_custom_prompt(profile)
+                            db.save_user_profile(profile)
+                            st.session_state["user_profile"] = profile
+                            st.toast(f"Restored '{ex_s}' to profile skills!", icon="✅")
+                            st.rerun()
 
         # Inline form to add candidate's own skills/tools
         with st.form("add_custom_skill_form", clear_on_submit=True):
@@ -234,11 +308,12 @@ if profile:
                     label_visibility="collapsed"
                 )
             with ask_c2:
-                btn_add_skill = st.form_submit_button("Add Skill", type="secondary", use_container_width=True)
+                btn_add_skill = st.form_submit_button("Add Skill", type="secondary", width="stretch")
 
             if btn_add_skill and new_skill_in:
                 cur_custom = list(profile.get("custom_skills", []))
                 cur_keywords = list(profile.get("keywords", []))
+                cur_excluded = list(profile.get("excluded_skills", []))
                 entries = [e.strip() for e in new_skill_in.split(",") if e.strip()]
                 added = []
                 for entry in entries:
@@ -247,10 +322,12 @@ if profile:
                         added.append(entry)
                     if not any(entry.lower() == k.lower() for k in cur_keywords):
                         cur_keywords.append(entry)
+                    cur_excluded = [ex for ex in cur_excluded if ex.lower() != entry.lower()]
 
                 if added:
                     profile["custom_skills"] = cur_custom
                     profile["keywords"] = cur_keywords
+                    profile["excluded_skills"] = cur_excluded
                     profile["adapted_prompt"] = career_compass.generate_adapted_custom_prompt(profile)
                     db.save_user_profile(profile)
                     st.session_state["user_profile"] = profile
@@ -422,9 +499,14 @@ if profile:
             s_data = career_compass.DOMAIN_VECTORS.get(s_dom, {}) if s_dom else {}
 
             existing_custom = list(profile.get("custom_skills", []))
-            merged_kw = list(p_data.get("core_keywords", []))[:18]
+            existing_excluded = list(profile.get("excluded_skills", []))
+            excluded_lower = {s.lower() for s in existing_excluded}
+            merged_kw = [
+                k for k in list(p_data.get("core_keywords", []))[:18]
+                if k.lower() not in excluded_lower
+            ]
             for cs in existing_custom:
-                if cs not in merged_kw:
+                if cs.lower() not in excluded_lower and cs not in merged_kw:
                     merged_kw.append(cs)
 
             new_profile = {
@@ -438,7 +520,8 @@ if profile:
                 "archetype_description": arch_def["desc"],
                 "scores": normalized,
                 "keywords": merged_kw,
-                "custom_skills": existing_custom,
+                "custom_skills": [cs for cs in existing_custom if cs.lower() not in excluded_lower],
+                "excluded_skills": existing_excluded,
                 "search_queries": list(p_data.get("recommended_roles", []))[:8],
                 "compliance_gates": list(p_data.get("compliance_gates", []))[:4],
                 "ai_synthesized": False,
@@ -476,7 +559,8 @@ if profile:
             if retake_submitted:
                 recalculated = career_compass.score_quiz_responses(
                     retake_answers,
-                    existing_custom_skills=profile.get("custom_skills", [])
+                    existing_custom_skills=profile.get("custom_skills", []),
+                    excluded_skills=profile.get("excluded_skills", []),
                 )
                 recalculated["ai_synthesized"] = False
                 adapted_prompt = career_compass.generate_adapted_custom_prompt(recalculated)

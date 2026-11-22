@@ -1,16 +1,17 @@
 import os
 import hmac
+import json
 import time
 import hashlib
 import secrets
 import threading
 from datetime import datetime, timezone
 import streamlit as st
-from dotenv import set_key
 
 import database as db
 
 ENV_FILE = ".env"
+SESSION_COOKIE_NAME = "skippy_session"
 PBKDF2_ALGORITHM = "sha256"
 PBKDF2_ITERATIONS = 600_000
 SALT_BYTES = 16
@@ -32,7 +33,7 @@ _DUMMY_HASH_HEX = hashlib.pbkdf2_hmac(
 _DUMMY_STORED_HASH = f"pbkdf2_sha256:{PBKDF2_ITERATIONS}:{_DUMMY_SALT_HEX}:{_DUMMY_HASH_HEX}"
 
 
-from database import secure_file_permissions as _secure_file_permissions, set_env_var_safe
+from database import set_env_var_safe
 
 _auth_tables_initialized_path: str | None = None
 
@@ -453,6 +454,64 @@ def reset_failed_attempts() -> None:
             conn.close()
 
 
+def _get_session_cookie() -> str | None:
+    """Reads the active session token from the browser's HTTP cookies via Streamlit's request context."""
+    try:
+        ctx = getattr(st, "context", None)
+        cookies = getattr(ctx, "cookies", None) if ctx is not None else None
+        if cookies is not None:
+            val = cookies.get(SESSION_COOKIE_NAME)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _clear_legacy_session_query_param() -> None:
+    """Strips any legacy `?session=` parameter from the address bar so tokens never linger in URLs."""
+    try:
+        if "session" in st.query_params:
+            st.query_params.pop("session", None)
+    except Exception:
+        pass
+
+
+def sync_session_cookie() -> None:
+    """Flushes any queued cookie set/clear operation to the browser via a hidden same-origin iframe."""
+    action = st.session_state.pop("_auth_cookie_action", None)
+    if not action:
+        return
+    op, token_val, max_age = action
+    cookie_name_js = json.dumps(SESSION_COOKIE_NAME)
+    if op == "set" and token_val:
+        token_js = json.dumps(str(token_val))
+        age_secs = max(60, int(max_age or _get_session_timeout_seconds()))
+        js_body = (
+            f"const name = {cookie_name_js};"
+            f"const val = {token_js};"
+            f"const sec = (window.parent && window.parent.location && window.parent.location.protocol === 'https:') ? '; Secure' : '';"
+            f"const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;"
+            f"targetDoc.cookie = name + '=' + encodeURIComponent(val) + '; Path=/; Max-Age={age_secs}; SameSite=Lax' + sec;"
+        )
+    else:
+        js_body = (
+            f"const name = {cookie_name_js};"
+            f"const sec = (window.parent && window.parent.location && window.parent.location.protocol === 'https:') ? '; Secure' : '';"
+            f"const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;"
+            f"targetDoc.cookie = name + '=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax' + sec;"
+        )
+    try:
+        st.iframe(
+            f"<!DOCTYPE html><html><body style='margin:0;padding:0;overflow:hidden;'><script>"
+            f"(function(){{ try {{ {js_body} }} catch (e) {{}} }})();"
+            f"</script></body></html>",
+            height=1,
+        )
+    except Exception:
+        pass
+
+
 def login_user(username: str) -> str:
     """Creates a new server-verified authenticated session for `username`."""
     token = secrets.token_urlsafe(32)
@@ -467,17 +526,15 @@ def login_user(username: str) -> str:
     st.session_state["authenticated"] = True
     st.session_state["auth_token"] = token
     st.session_state["auth_username"] = clean_user
-    try:
-        st.query_params["session"] = token
-    except Exception:
-        pass
+    st.session_state["_auth_cookie_action"] = ("set", token, _get_session_timeout_seconds())
+    _clear_legacy_session_query_param()
     reset_failed_attempts()
     return token
 
 
 def logout_user(revoke_all: bool = False) -> None:
     """Terminates the current authenticated session (or all sessions if `revoke_all=True`)."""
-    token = st.session_state.get("auth_token") or st.query_params.get("session")
+    token = st.session_state.get("auth_token") or _get_session_cookie()
     with _auth_lock:
         if revoke_all:
             _active_sessions.clear()
@@ -486,18 +543,18 @@ def logout_user(revoke_all: bool = False) -> None:
 
     for key in ("authenticated", "auth_token", "auth_username"):
         st.session_state.pop(key, None)
-    try:
-        st.query_params.pop("session", None)
-    except Exception:
-        pass
+    st.session_state["_auth_cookie_action"] = ("clear", "", 0)
+    _clear_legacy_session_query_param()
 
 
 def is_authenticated() -> bool:
     """
-    Validates that the current browser session holds an active, non-expired server session token.
+    Validates that the current browser session holds an active, non-expired server session token
+    via `st.session_state` or the `skippy_session` browser cookie (never via URL query parameters).
     Automatically expires idle sessions after `SKIPPY_SESSION_TIMEOUT_MINUTES`.
     """
-    token = st.session_state.get("auth_token") or st.query_params.get("session")
+    _clear_legacy_session_query_param()
+    token = st.session_state.get("auth_token") or _get_session_cookie()
     if not token or not isinstance(token, str):
         if st.session_state.get("authenticated"):
             logout_user()
@@ -513,10 +570,8 @@ def is_authenticated() -> bool:
             st.session_state.pop("authenticated", None)
             st.session_state.pop("auth_token", None)
             st.session_state.pop("auth_username", None)
-            try:
-                st.query_params.pop("session", None)
-            except Exception:
-                pass
+            if _get_session_cookie():
+                st.session_state["_auth_cookie_action"] = ("clear", "", 0)
             return False
 
         if (now - session_info.get("last_seen", 0)) > timeout_secs:
@@ -524,10 +579,7 @@ def is_authenticated() -> bool:
             st.session_state.pop("authenticated", None)
             st.session_state.pop("auth_token", None)
             st.session_state.pop("auth_username", None)
-            try:
-                st.query_params.pop("session", None)
-            except Exception:
-                pass
+            st.session_state["_auth_cookie_action"] = ("clear", "", 0)
             st.session_state["auth_expired_notice"] = True
             return False
 
@@ -535,11 +587,6 @@ def is_authenticated() -> bool:
         st.session_state["authenticated"] = True
         st.session_state["auth_token"] = token
         st.session_state["auth_username"] = session_info.get("username", "admin")
-        try:
-            if st.query_params.get("session") != token:
-                st.query_params["session"] = token
-        except Exception:
-            pass
         return True
 
 
@@ -554,6 +601,7 @@ def render_login_page() -> None:
     """Renders the full-screen secure login or first-time admin setup page."""
     from utils import inject_interactive_hover_halo_effects
     inject_interactive_hover_halo_effects()
+    sync_session_cookie()
 
     st.markdown(
         """
@@ -751,6 +799,7 @@ def render_sidebar_auth_controls() -> None:
                     # Revoke all existing sessions and issue a fresh token for the current session
                     logout_user(revoke_all=True)
                     login_user(updated_username.strip())
+                    sync_session_cookie()
                     st.success("✅ Credentials updated!")
 
 

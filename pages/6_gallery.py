@@ -8,11 +8,9 @@ from datetime import datetime, date, timedelta
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import database as db
+from utils import render_ats_resume_downloads
 from evaluator import (
     generate_docx_from_markdown,
-    generate_ats_resume_docx,
-    generate_ats_resume_pdf,
-    is_pdf_conversion_available,
     render_ats_resume_html,
     get_fit_band,
 )
@@ -48,7 +46,7 @@ if not gallery_jobs:
         )
         c1, c2, _ = st.columns([1.8, 1.8, 4])
         with c1:
-            if st.button("📁 Go to Job History ➔", type="primary", width="stretch", key="btn_gallery_empty_goto_history"):
+            if st.button("📁 Go to Evaluations ➔", type="primary", width="stretch", key="btn_gallery_empty_goto_history"):
                 st.switch_page("pages/2_history.py")
         with c2:
             if st.button("🔍 Find & Review Jobs ➔", width="stretch", key="btn_gallery_empty_goto_search"):
@@ -105,9 +103,9 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
 
     if file_prefix == "Resume":
         style_options = {
-            "📄 Classic Clean (Arial — Simple Single Column)": "classic",
+            "📄 Standard ATS (Arial — Single Column)": "clean",
+            "🏛️ Harvard Style (Times New Roman with Dividers)": "harvard",
             "✨ Modern Professional (Calibri with Clean Dividers)": "modern",
-            "🏛️ Traditional / Academic (Times New Roman with Dividers)": "serif",
         }
         c_tpl, c_view = st.columns([2.8, 2.4])
         with c_tpl:
@@ -133,6 +131,15 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
                 key=editor_key,
                 on_change=_sync_modal_editor,
             )
+            col_apply, _ = st.columns([3, 4])
+            with col_apply:
+                if st.button("💾 Apply Changes", key=f"gal_apply_{safe_suffix}", type="secondary", width="stretch"):
+                    st.session_state[cache_key] = edited_val
+                    job[doc_key] = edited_val
+                    if url:
+                        db.update_job_field(url, doc_key, edited_val)
+                    active_content = edited_val
+                    st.toast("✅ Changes applied and saved!", icon="💾")
             if edited_val != active_content:
                 st.session_state[cache_key] = edited_val
                 job[doc_key] = edited_val
@@ -149,6 +156,15 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
                     key=editor_key,
                     on_change=_sync_modal_editor,
                 )
+                col_apply, _ = st.columns([3.5, 2.5])
+                with col_apply:
+                    if st.button("💾 Apply Changes", key=f"gal_apply_{safe_suffix}", type="secondary", width="stretch"):
+                        st.session_state[cache_key] = edited_val
+                        job[doc_key] = edited_val
+                        if url:
+                            db.update_job_field(url, doc_key, edited_val)
+                        active_content = edited_val
+                        st.toast("✅ Changes applied and saved!", icon="💾")
                 if edited_val != active_content:
                     st.session_state[cache_key] = edited_val
                     job[doc_key] = edited_val
@@ -161,67 +177,47 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
         else:
             st.markdown(render_ats_resume_html(active_content, template_style=ats_style_key), unsafe_allow_html=True)
 
-        has_pdf = is_pdf_conversion_available()
-        if has_pdf:
-            dl_c1, dl_c2 = st.columns(2)
-            with dl_c1:
-                st.download_button(
-                    "📥 Download ATS Resume (.docx)",
-                    data=lambda: generate_ats_resume_docx(active_content, template_style=ats_style_key),
-                    file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    width="stretch",
-                    type="primary",
-                    key=f"modal_dl_docx_{file_prefix}_{url}",
-                )
-            with dl_c2:
-                pdf_src = (active_content, ats_style_key)
-                pdf_state = f"pdf_bytes_{file_prefix}"
-                cached_pdf = st.session_state.get(pdf_state)
-                if not (cached_pdf and cached_pdf[0] == pdf_src) and st.button("📕 Prepare ATS PDF", width="stretch", key=f"prep_pdf_{file_prefix}"):
-                    with st.spinner("Converting to PDF (first run can take ~20s)..."):
-                        built = generate_ats_resume_pdf(*pdf_src)
-                    if built:
-                        st.session_state[pdf_state] = (pdf_src, built)
-                    else:
-                        st.warning("PDF conversion failed. Download the .docx instead, or try again.")
-                cached_pdf = st.session_state.get(pdf_state)
-                if cached_pdf and cached_pdf[0] == pdf_src:
-                    st.download_button(
-                        "📕 Download ATS (.pdf)",
-                        data=cached_pdf[1],
-                        file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.pdf",
-                        mime="application/pdf",
-                        width="stretch",
-                        key=f"modal_dl_pdf_{file_prefix}_{url}",
-                    )
-        else:
-            st.download_button(
-                "📥 Download ATS Resume (.docx)",
-                data=lambda: generate_ats_resume_docx(active_content, template_style=ats_style_key),
-                file_name=f"ATS_Resume_{safe_title}_{safe_suffix}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                width="stretch",
-                type="primary",
-                key=f"modal_dl_{file_prefix}_{url}",
-            )
-    else:
-        st.session_state[editor_key] = active_content
-        edited_val = st.text_area(
-            "Edit / Copy Markdown:",
-            height=480,
-            key=editor_key,
-            on_change=_sync_modal_editor,
+        render_ats_resume_downloads(
+            markdown_text=active_content,
+            ats_style_key=ats_style_key,
+            file_stem=f"ATS_Resume_{safe_title}_{safe_suffix}",
+            docx_key=f"modal_dl_docx_{file_prefix}_{url}",
+            pdf_state_key=f"pdf_bytes_{file_prefix}",
+            prep_pdf_key=f"prep_pdf_{file_prefix}",
+            pdf_dl_key=f"modal_dl_pdf_{file_prefix}_{url}",
+            docx_label="📥 Download ATS Resume (.docx)",
         )
-        if edited_val != active_content:
-            st.session_state[cache_key] = edited_val
-            job[doc_key] = edited_val
-            if url:
-                db.update_job_field(url, doc_key, edited_val)
-            active_content = edited_val
+        resume_audit = db.get_doc_audit(job.get("Reviewer Audit", ""), "Tailored Resume")
+        if resume_audit:
+            with st.expander("🛡️ Accuracy & Fact-Check Grounding Report", expanded=False):
+                st.markdown(resume_audit)
+    else:
+        display_content = db.format_all_doc_audits(active_content) if doc_key == "Reviewer Audit" else active_content
+        if doc_key == "Reviewer Audit":
+            st.markdown(display_content)
+        else:
+            st.session_state[editor_key] = active_content
+            edited_val = st.text_area(
+                "Edit / Copy Markdown:",
+                height=480,
+                key=editor_key,
+                on_change=_sync_modal_editor,
+            )
+            if edited_val != active_content:
+                st.session_state[cache_key] = edited_val
+                job[doc_key] = edited_val
+                if url:
+                    db.update_job_field(url, doc_key, edited_val)
+                active_content = edited_val
+            display_content = active_content
+            if doc_key == "Cover Letter":
+                cl_audit = db.get_doc_audit(job.get("Reviewer Audit", ""), "Cover Letter")
+                if cl_audit:
+                    with st.expander("🛡️ Accuracy & Fact-Check Grounding Report", expanded=False):
+                        st.markdown(cl_audit)
         st.download_button(
             f"📥 Download {doc_label} (.docx)",
-            data=lambda: generate_docx_from_markdown(active_content),
+            data=lambda: generate_docx_from_markdown(display_content),
             file_name=f"{safe_prefix}_{safe_title}_{safe_suffix}.docx",
             width="stretch",
             type="primary",

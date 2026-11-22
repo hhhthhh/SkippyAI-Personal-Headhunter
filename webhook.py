@@ -1,13 +1,15 @@
 import os
 import hmac
 import json
+import secrets
 import threading
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from database import atomic_write_json, secure_file_permissions, normalize_job_url
+from database import atomic_write_json, secure_file_permissions, normalize_job_url, set_env_var_safe
 
 app = FastAPI(title="Skippy Ingestion API")
 
@@ -21,15 +23,40 @@ app.add_middleware(
         "http://127.0.0.1:8000",
     ],
     allow_origin_regex=r"^(chrome-extension://.*|moz-extension://.*|http://(localhost|127\.0\.0\.1)(:\d+)?)$",
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Skippy-Token"],
 )
 
 INBOX_FILE = "inbox.json"
+ENV_FILE = ".env"
 MAX_INBOX_SIZE = 100
 _inbox_lock = threading.Lock()
 _server_lock = threading.Lock()
+_token_lock = threading.Lock()
 _server_thread = None
+
+
+def get_or_create_webhook_token(env_file: str | None = None) -> str:
+    """Returns `SKIPPY_WEBHOOK_TOKEN`, generating and persisting a strong random token into `.env` on first run."""
+    existing = os.environ.get("SKIPPY_WEBHOOK_TOKEN", "").strip().strip("'\"")
+    if existing:
+        return existing
+    target_env = env_file or ENV_FILE
+    with _token_lock:
+        existing = os.environ.get("SKIPPY_WEBHOOK_TOKEN", "").strip().strip("'\"")
+        if existing:
+            return existing
+        if os.path.exists(target_env):
+            try:
+                load_dotenv(target_env, override=False)
+            except Exception:
+                pass
+            existing = os.environ.get("SKIPPY_WEBHOOK_TOKEN", "").strip().strip("'\"")
+            if existing:
+                return existing
+        token = secrets.token_urlsafe(32)
+        set_env_var_safe("SKIPPY_WEBHOOK_TOKEN", token, env_file=target_env)
+        return token
 
 if os.path.exists(INBOX_FILE):
     secure_file_permissions(INBOX_FILE)
@@ -96,9 +123,12 @@ async def ingest_job(
     job: JobPayload,
     x_skippy_token: str | None = Header(default=None),
 ):
-    expected_token = os.environ.get("SKIPPY_WEBHOOK_TOKEN", "").strip()
-    if expected_token and not hmac.compare_digest(x_skippy_token or "", expected_token):
-        raise HTTPException(status_code=401, detail="Invalid or missing webhook token.")
+    expected_token = get_or_create_webhook_token()
+    if not expected_token or not hmac.compare_digest((x_skippy_token or "").strip(), expected_token):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing Skippy Webhook Token. Copy your token from Skippy -> Extension Inbox and paste it into the Skippy Job Catcher extension popup.",
+        )
 
     clean_url = job.url.strip()
     if not (clean_url.startswith("http://") or clean_url.startswith("https://")):
@@ -140,6 +170,7 @@ def _run_server():
 def start_background_listener():
     """Spawns the FastAPI server in a background daemon thread (singleton)."""
     global _server_thread
+    get_or_create_webhook_token()
     with _server_lock:
         if _server_thread is not None and _server_thread.is_alive():
             return _server_thread

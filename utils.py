@@ -2,9 +2,8 @@ import os
 import io
 import html
 import json
-import re
 import streamlit as st
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv
 from pipeline import pipeline_manager
 from auth import enforce_authentication, render_sidebar_auth_controls, logout_user
 
@@ -19,10 +18,9 @@ from database import (
     set_setting,
     is_onboarding_completed,
     mark_onboarding_completed,
-    reset_onboarding_status,
 )
 import career_compass
-from sample_data import SAMPLE_RESUMES, SAMPLE_JOBS, test_ai_connection
+from evaluator import test_ai_connection
 
 ENV_FILE = ".env"
 RESUMES_FILE = "resumes.json"
@@ -51,30 +49,42 @@ def save_local_config(api_key):
     set_env_var_safe("USER_API_KEY", clean_key, env_file=ENV_FILE)
 
 def render_help_content():
-    st.markdown("**🔑 Acquiring API Keys**")
-    st.markdown("NOTE: We recommend using Google Gemini as it has been extensively tested, works the best, and is free to use!")
+    st.markdown("**🔑 AI Providers & API Keys**")
     st.markdown(
-        "- **Google Gemini:** [Google AI Studio](https://aistudio.google.com/app/apikey)\n"
-        "- **OpenAI ChatGPT:** [OpenAI Platform](https://platform.openai.com/api-keys)\n"
-        "- **Anthropic Claude:** [Anthropic Console](https://console.anthropic.com/settings/keys)\n"
-        "- **xAI Grok:** [xAI Console](https://console.x.ai/)"
+        "Skippy lets you bring your own AI provider (default models shown)—or run **100% offline** with Ollama:\n"
+        "- **Google Gemini (Recommended):** `gemini-2.5-flash` — [Google AI Studio](https://aistudio.google.com/app/apikey) *(~$0.0004/evaluation on Tier 1; paste multiple keys separated by commas/newlines for automatic rotation)*\n"
+        "- **OpenAI ChatGPT:** `gpt-4o-mini` — [OpenAI Platform](https://platform.openai.com/api-keys)\n"
+        "- **Anthropic Claude:** `claude-3-5-sonnet` — [Anthropic Console](https://console.anthropic.com/settings/keys)\n"
+        "- **xAI Grok:** `grok-2-latest` — [xAI Console](https://console.x.ai/)\n"
+        "- **Local / Custom (Ollama):** 100% free and offline on your own hardware (no API key required)."
     )
     st.markdown("---")
-    st.markdown("**📊 Using the Pipeline**")
+    st.markdown("**🤖 What Uses AI vs. Offline Tools**")
     st.markdown(
-        "- **Focus Mode:** Click any checkbox in the Overview Table to instantly jump to that job's details.\n"
-        "- **Status Tracking:** Changing a job's status automatically color-codes your pipeline table."
+        "- **Uses AI:** Job match evaluations, tailored resumes/cover letters (with automatic **Fact-Check Grounding**), interview prep, application answers, outreach/company briefs, **Deep Career Profile Analysis**, **AI Content Polish**, and **Learning Plans**.\n"
+        "- **100% Offline (0 API calls):** Job board discovery, **Job Text Safety Shield**, repost/ghost-job checks, **Smart Auto-Fix** resume formatting, **Quick Regex** career profiling, **Application Tracker**, and `.docx`/`.pdf` exports.\n"
+        "- **Privacy:** All data is stored locally in `skippy.db`. Cloud providers only receive the resume and job text needed for the active request; choose **Ollama** for fully offline runs."
     )
     st.markdown("---")
-    st.markdown("**⚠️ Formatting Notice**")
-    st.markdown("When downloading a tailored resume, paste the newly generated bullet points into your stylized Word template using **'Keep Text Only'**.")
+    st.markdown("**📄 Resume Editing, Templates & Fact-Checking**")
+    st.markdown(
+        "- **Live Split View & Apply Changes:** Edit generated resumes side-by-side with a live preview in **Evaluations** and **Saved Documents**, then click **💾 Apply Changes** to save edits to your database.\n"
+        "- **ATS Templates:** Switch between **Standard ATS** (Arial), **Harvard Style** (Times New Roman with divider rules), and **Modern Slate** (Calibri) before downloading `.docx` (or `.pdf` when LibreOffice is installed).\n"
+        "- **Automatic Fact-Check Report:** Every newly generated tailored resume and cover letter is automatically audited against your real resume, with a separate **Accuracy & Fact-Check Grounding Report** shown beneath each draft."
+    )
+    st.markdown("---")
+    st.markdown("**📊 Evaluations, Archiving & Application Tracker**")
+    st.markdown(
+        "- **Active & Archived Views:** Setting a posting's status to **Archived** moves it to the dedicated **🗄️ Archived** view in **Evaluations** and its own **Archived** stage in **Application Tracker**.\n"
+        "- **Jump to Posting:** Use **🔍 Jump to Posting ➔** from **Application Tracker** or **Saved Documents** to open any job's full workspace immediately."
+    )
     st.markdown("---")
     st.markdown("**🌐 Supported Job Sites & Scraping Guide**")
     st.markdown(
-        "- **🔎 Native Job Board Search (Free, No Key Required):** Search **LinkedIn** (via public guest endpoints) and **FreeHire** (global tech job aggregator) directly inside Skippy by role, location, workplace mode, and recency.\n"
-        "- **🏢 Built In & Direct URLs:** **Built In** (`builtin.com`) and direct **LinkedIn** job URLs (`linkedin.com/jobs/view/...`) are supported for automated scraping in Multi-URL and Universal Search.\n"
-        "- **🧩 LinkedIn Extension Inbox:** Easily accessible via the **🔗 LinkedIn Extension Inbox** button and navigation item in the sidebar. Use Skippy's browser extension to capture postings with 1 click while browsing logged-in.\n"
-        "- **🛡️ Posting Guard Security:** All scraped and pasted postings are deterministically sanitized to remove hidden HTML prompt-injection blocks and invisible Unicode tampering before reaching your AI provider."
+        "- **🔎 Live Job Board Search (Free, No Login):** Search **LinkedIn** (public guest search), **Direct Company Hiring Pages** (**Greenhouse**, **Ashby**, **Lever**), and **FreeHire** by role, location, workplace mode, and recency.\n"
+        "- **📝 Paste Job Text, Multiple Links & Categories:** Paste raw job descriptions, batch URLs (**Built In**, **LinkedIn**, company boards), or browse category presets directly in **Job Search**.\n"
+        "- **🔗 Extension Inbox:** Right-click any LinkedIn listing with the Skippy browser extension to queue it into **Extension Inbox** and evaluate in the background.\n"
+        "- **🛡️ Job Text Safety Shield:** All scraped and pasted postings are deterministically sanitized to strip hidden HTML, invisible Unicode characters, and prompt-injection lines before reaching your AI."
     )
 
 def render_help_section(in_sidebar=True):
@@ -605,20 +615,34 @@ def render_pipeline_spinner_html(
 
 def start_scraper_evaluations(items: list) -> None:
     """Starts the background evaluation pipeline for a list of job dicts or URLs."""
+    if not items:
+        st.warning("⚠️ No postings provided to review.")
+        return
+
     if pipeline_manager.is_running:
         st.warning("⚠️ An evaluation pipeline is already running in the background. Please wait for it to complete or stop it from the sidebar.")
         return
 
     chosen_resumes = st.session_state.get("selected_resumes", ["Master Resume"])
     combined_resume = combine_selected_resumes(chosen_resumes)
-    st.session_state.resume_text = combined_resume
+    st.session_state["resume_text"] = combined_resume
+
+    system_instructions = st.session_state.get("system_instructions", "")
+    if not system_instructions:
+        details = get_active_prompt_details()
+        system_instructions = details.get("prompt_text", "")
+
+    api_key = st.session_state.get("user_api_key", "")
+    if not api_key:
+        config = load_local_config()
+        api_key = config.get("user_api_key") or os.environ.get("USER_API_KEY", "")
 
     started = pipeline_manager.start_url_pipeline(
         urls=items,
         resume_text=combined_resume,
-        system_instructions=st.session_state.system_instructions,
+        system_instructions=system_instructions,
         model_choice=st.session_state.get("model_choice", "Google Gemini"),
-        api_key=st.session_state.get("user_api_key", ""),
+        api_key=api_key,
         local_base_url=st.session_state.get("local_base_url", ""),
         local_model_name=st.session_state.get("local_model_name", ""),
         model_override=st.session_state.get("model_override", ""),
@@ -628,39 +652,319 @@ def start_scraper_evaluations(items: list) -> None:
     if started:
         if "completion_batch" in st.session_state:
             del st.session_state["completion_batch"]
+        st.session_state["pipeline_scroll_to_banner_nonce"] = st.session_state.get("pipeline_scroll_to_banner_nonce", 0) + 1
+        st.toast("🚀 Evaluation pipeline started! Scrolling to live progress...", icon="⚡")
         st.rerun()
+    else:
+        st.error("Failed to start evaluation pipeline. Please check if another pipeline is running or verify your API settings.")
+
+
+def render_ats_resume_downloads(
+    markdown_text: str,
+    ats_style_key: str,
+    file_stem: str,
+    docx_key: str,
+    pdf_state_key: str,
+    prep_pdf_key: str,
+    pdf_dl_key: str,
+    docx_label: str = "📥 Download ATS (.docx)",
+    col_docx=None,
+    col_pdf=None,
+) -> None:
+    """Shared DOCX + on-demand PDF export buttons for ATS resumes across Evaluations and Saved Documents."""
+    from evaluator import generate_ats_resume_docx, generate_ats_resume_pdf, is_pdf_conversion_available
+
+    has_pdf = is_pdf_conversion_available()
+    if col_docx is None:
+        if has_pdf:
+            col_docx, col_pdf = st.columns(2)
+        else:
+            col_docx = st.container()
+            col_pdf = None
+
+    with col_docx:
+        st.download_button(
+            docx_label,
+            data=lambda: generate_ats_resume_docx(markdown_text, template_style=ats_style_key),
+            file_name=f"{file_stem}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            width="stretch",
+            type="primary",
+            key=docx_key,
+        )
+
+    if has_pdf and col_pdf is not None:
+        with col_pdf:
+            pdf_src = (markdown_text, ats_style_key)
+            cached_pdf = st.session_state.get(pdf_state_key)
+            if not (cached_pdf and cached_pdf[0] == pdf_src) and st.button("📕 Prepare ATS PDF", width="stretch", key=prep_pdf_key):
+                with st.spinner("Converting to PDF (first run can take ~20s)..."):
+                    built = generate_ats_resume_pdf(*pdf_src)
+                if built:
+                    st.session_state[pdf_state_key] = (pdf_src, built)
+                else:
+                    st.warning("PDF conversion failed. Download the .docx instead, or try again.")
+            cached_pdf = st.session_state.get(pdf_state_key)
+            if cached_pdf and cached_pdf[0] == pdf_src:
+                st.download_button(
+                    "📕 Download ATS (.pdf)",
+                    data=cached_pdf[1],
+                    file_name=f"{file_stem}.pdf",
+                    mime="application/pdf",
+                    width="stretch",
+                    key=pdf_dl_key,
+                )
 
 
 @st.fragment(run_every="2s")
-def render_active_scraper_pipeline_banner(stop_key: str = "stop_scraper_pipeline_main") -> None:
-    """Renders the live progress banner and stop control when a Scraper evaluation batch is running."""
+def render_global_top_pipeline_banner():
+    """
+    Renders a prominent, full-width screen-wide banner notification
+    across all app pages whenever background job evaluations are underway,
+    or upon completion with a one-click navigation jump to Job History.
+    """
     check_and_handle_pipeline_completion()
     status = pipeline_manager.get_status()
-    if status.get("is_running") and status.get("source") == "Scraper":
+    is_running = bool(status.get("is_running"))
+    was_running = bool(st.session_state.get("_last_observed_pipeline_running", False))
+    st.session_state["_last_observed_pipeline_running"] = is_running
+
+    if is_running and not was_running:
+        st.session_state["pipeline_scroll_to_banner_nonce"] = st.session_state.get("pipeline_scroll_to_banner_nonce", 0) + 1
+
+    if is_running:
+        st.html("<div id='global_pipeline_top_banner' style='scroll-margin-top: 100px;'></div>")
+        is_stopping = status.get("is_stopping", False)
+        total = max(status.get("total", 1), 1)
+        completed = status.get("completed", 0)
+        remaining = max(total - completed, 0)
+        prog = min(completed / total, 1.0)
+        cur = status.get("current_job", "Initializing...")
+        source = status.get("source", "Job Evaluation")
+
         with st.container(border=True):
-            if status.get("is_stopping"):
-                render_pipeline_spinner_html(
-                    "Stopping Review...",
-                    "Halting background review pipeline gracefully...",
-                    is_stopping=True,
-                )
-                st.button("🛑 Stopping...", key=stop_key, disabled=True)
-            else:
-                total = max(status.get("total", 1), 1)
-                completed = status.get("completed", 0)
-                prog = min(completed / total, 1.0)
-                cur = status.get("current_job", "Initializing...")
-                if len(cur) > 60:
-                    cur = cur[:57] + "..."
-                render_pipeline_spinner_html(
-                    "Reviewing Jobs in the Background...",
-                    f"Evaluating ({completed}/{total}): {cur}",
-                )
-                st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
-                st.info("💡 **You can freely explore other pages:** Reviewing continues in the background while you browse.")
-                if st.button("🛑 Stop Review", key=stop_key):
-                    pipeline_manager.cancel()
+            st.markdown(
+                f"""
+                <style>
+                @keyframes skippy-spin {{
+                    0% {{ transform: rotate(0deg); }}
+                    100% {{ transform: rotate(360deg); }}
+                }}
+                @keyframes skippy-pulse-ring {{
+                    0% {{ box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.6); }}
+                    70% {{ box-shadow: 0 0 0 10px rgba(147, 51, 234, 0); }}
+                    100% {{ box-shadow: 0 0 0 0 rgba(147, 51, 234, 0); }}
+                }}
+                .skippy-pipeline-banner {{
+                    background: linear-gradient(135deg, rgba(147, 51, 234, 0.12) 0%, rgba(59, 130, 246, 0.12) 100%);
+                    border-radius: 8px;
+                    padding: 14px 18px;
+                    border: 1px solid rgba(147, 51, 234, 0.35);
+                    margin-bottom: 12px;
+                }}
+                .skippy-banner-spinner {{
+                    width: 34px;
+                    height: 34px;
+                    border: 3.5px solid rgba(147, 51, 234, 0.2);
+                    border-top: 3.5px solid #9333ea;
+                    border-radius: 50%;
+                    animation: skippy-spin 0.8s linear infinite;
+                    flex-shrink: 0;
+                }}
+                .skippy-inline-spinner {{
+                    width: 15px;
+                    height: 15px;
+                    border: 2px solid rgba(147, 51, 234, 0.2);
+                    border-top: 2px solid #9333ea;
+                    border-radius: 50%;
+                    animation: skippy-spin 0.8s linear infinite;
+                    flex-shrink: 0;
+                    display: inline-block;
+                }}
+                .skippy-live-pill {{
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    background: {'rgba(239, 68, 68, 0.2)' if is_stopping else 'rgba(16, 185, 129, 0.2)'};
+                    color: {'#ef4444' if is_stopping else '#10b981'};
+                    border: 1px solid {'rgba(239, 68, 68, 0.4)' if is_stopping else 'rgba(16, 185, 129, 0.4)'};
+                    padding: 3px 10px;
+                    border-radius: 9999px;
+                    font-size: 0.75rem;
+                    font-weight: 700;
+                    letter-spacing: 0.05em;
+                }}
+                .skippy-live-dot {{
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    background: {'#ef4444' if is_stopping else '#10b981'};
+                    animation: skippy-pulse-ring 1.5s infinite;
+                }}
+                </style>
+                <div class="skippy-pipeline-banner">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <div style="display:flex; align-items:center; gap:14px;">
+                            {f'''<span style="font-size:1.8rem; line-height:1;">🛑</span>''' if is_stopping else f'''<div style="position:relative; width:34px; height:34px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><div class="skippy-banner-spinner" style="position:absolute; width:100%; height:100%; box-sizing:border-box;"></div><span style="font-size:1.1rem; line-height:1;">⚡</span></div>'''}
+                            <div>
+                                <h3 style="margin:0; font-size:1.2rem; font-weight:700; letter-spacing:-0.01em;">
+                                    {'Halting Evaluation Pipeline...' if is_stopping else 'AI Job Evaluation Pipeline In Progress'}
+                                </h3>
+                                <p style="margin:2px 0 0 0; font-size:0.86rem; opacity:0.85;">
+                                    {'Wrapping up active analysis and safely committing progress...' if is_stopping else 'Skippy is scoring postings in the background with 4-pillar rubrics, eligibility compliance, and gap analysis.'}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="skippy-live-pill">
+                            <span class="skippy-live-dot"></span>
+                            <span>{'STOPPING' if is_stopping else 'LIVE PIPELINE'}</span>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Key live metrics
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Evaluated", f"{completed} / {total}")
+            c2.metric("Progress", f"{int(prog * 100)}%")
+            c3.metric("Remaining", f"{remaining}")
+            c4.metric("Source", source)
+
+            st.progress(prog, text=f"Evaluating role {min(completed + 1, total)} of {total} ({int(prog * 100)}% complete)...")
+
+            escaped_cur = html.escape(cur)
+            st.markdown(
+                f"""
+                <div style="
+                    padding: 8px 12px;
+                    background: rgba(128, 128, 128, 0.08);
+                    border-left: 3px solid rgba(147, 51, 234, 0.8);
+                    border-radius: 4px;
+                    margin: 8px 0 12px 0;
+                    font-size: 0.88rem;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                ">
+                    {f'<span style="font-size:1rem;">🛑</span>' if is_stopping else '<div class="skippy-inline-spinner"></div>'}
+                    <span style="font-weight:600; color:rgba(147, 51, 234, 1.0);">Currently Evaluating:</span>
+                    <span style="font-family: monospace; font-size: 0.85rem;">{escaped_cur}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            btn_col1, btn_col2, _ = st.columns([2.5, 3.5, 4.0], vertical_alignment="center")
+            with btn_col1:
+                if is_stopping:
+                    st.button("🛑 Stopping...", key="btn_stop_top_banner_disabled", disabled=True, width="stretch")
+                else:
+                    if st.button("🛑 Stop Review", key="btn_stop_top_banner", type="secondary", width="stretch"):
+                        pipeline_manager.cancel()
+                        st.rerun()
+            with btn_col2:
+                if st.button("📁 View Completed in Evaluations ➔", key="btn_view_top_banner_hist", type="primary", width="stretch"):
+                    st.session_state["active_history_source"] = source
+                    st.switch_page("pages/2_history.py")
+
+        st.markdown("---")
+
+        # Smooth auto-scroll to the top banner when a review is started
+        current_scroll_nonce = st.session_state.get("pipeline_scroll_to_banner_nonce", 0)
+        last_scrolled_nonce = st.session_state.get("_last_pipeline_scroll_nonce", -1)
+
+        if current_scroll_nonce > 0 and current_scroll_nonce != last_scrolled_nonce:
+            st.session_state["_last_pipeline_scroll_nonce"] = current_scroll_nonce
+            st.iframe(
+                f"""<!DOCTYPE html>
+                <html>
+                <head>
+                <style>html, body {{ margin: 0; padding: 0; border: none; overflow: hidden; background: transparent; }}</style>
+                </head>
+                <body>
+                <script>
+                (function() {{
+                    let attempts = 0;
+                    const maxAttempts = 60;
+                    const interval = setInterval(function() {{
+                        attempts++;
+                        try {{
+                            const doc = window.parent ? window.parent.document : document;
+                            const target = doc.getElementById('global_pipeline_top_banner');
+                            if (target) {{
+                                clearInterval(interval);
+                                target.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                            }} else {{
+                                const main = doc.querySelector('.stMain') || doc.querySelector('[data-testid=\"stMain\"]') || (window.parent || window);
+                                if (main && typeof main.scrollTo === 'function') {{
+                                    main.scrollTo({{ top: 0, behavior: 'smooth' }});
+                                }}
+                                if (attempts >= maxAttempts) clearInterval(interval);
+                            }}
+                        }} catch (e) {{
+                            if (attempts >= maxAttempts) clearInterval(interval);
+                        }}
+                    }}, 30);
+                }})();
+                </script>
+                <!-- nonce: {current_scroll_nonce} -->
+                </body>
+                </html>""",
+                height=1,
+            )
+
+    elif "completion_batch" in st.session_state and st.session_state["completion_batch"].get("jobs"):
+        batch = st.session_state["completion_batch"]
+        jobs = batch.get("jobs", [])
+        count = len(jobs)
+        src = batch.get("source", "Pipeline")
+        was_cancelled = batch.get("was_cancelled", False)
+
+        strong = sum(1 for j in jobs if j.get("Score", 0) >= 75 and j.get("Eligible", True))
+        reach = sum(1 for j in jobs if j.get("Score", 0) < 75 and j.get("Eligible", True))
+        disqualified = sum(1 for j in jobs if not j.get("Eligible", True))
+
+        with st.container(border=True):
+            st.markdown(
+                f"""
+                <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+                    <span style="font-size:2rem; line-height:1;">{'⏹️' if was_cancelled else '🎉'}</span>
+                    <div>
+                        <h3 style="margin:0; font-size:1.25rem; font-weight:700;">
+                            {'Evaluation Stopped' if was_cancelled else 'Evaluation Pipeline Finished!'}
+                        </h3>
+                        <p style="margin:2px 0 0 0; font-size:0.88rem; opacity:0.85;">
+                            {'Review halted gracefully. All evaluated jobs were saved to your database.' if was_cancelled else f'Successfully evaluated {count} posting(s) from <strong>{html.escape(src)}</strong>. Tailored materials are ready to generate.'}
+                        </p>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Jobs Evaluated", count)
+            m2.metric("Strong Matches (75+)", strong)
+            m3.metric("Moderate Matches", reach)
+            m4.metric("Dealbreakers", disqualified)
+
+            col_view, col_dismiss, _ = st.columns([3.5, 2.0, 4.5], vertical_alignment="center")
+            with col_view:
+                if st.button("📁 View in Evaluations ➔", key="btn_view_top_banner_hist", type="primary", width="stretch"):
+                    st.session_state["active_history_source"] = src
+                    del st.session_state["completion_batch"]
+                    pipeline_manager.dismiss_latest_run()
+                    st.switch_page("pages/2_history.py")
+            with col_dismiss:
+                if st.button("Dismiss", key="btn_dismiss_top_banner", width="stretch"):
+                    del st.session_state["completion_batch"]
+                    pipeline_manager.dismiss_latest_run()
                     st.rerun()
+
+        st.markdown("---")
 
 
 @st.fragment(run_every="2s")
@@ -668,51 +972,32 @@ def render_global_pipeline_status():
     check_and_handle_pipeline_completion()
     status = pipeline_manager.get_status()
 
-    # 1. If pipeline is running, render a live card in the sidebar
+    # If pipeline is running, render a concise live card in the sidebar
     if status.get("is_running"):
         with st.container(border=True):
             if status.get("is_stopping"):
-                render_pipeline_spinner_html(
-                    "Stopping Review...",
-                    "Halting pipeline gracefully...",
-                    compact=True,
-                    is_stopping=True,
-                )
-                st.button("🛑 Stopping...", key="btn_cancel_global_pipeline", width="stretch", disabled=True)
+                st.caption("🛑 **Halting Pipeline...**")
+                st.button("Stopping...", key="btn_cancel_global_pipeline_disabled", width="stretch", disabled=True)
             else:
                 total = max(status.get("total", 1), 1)
                 completed = status.get("completed", 0)
                 prog = min(completed / total, 1.0)
-
-                cur = status.get("current_job", "Working...")
-                if len(cur) > 35:
-                    cur = cur[:32] + "..."
-                render_pipeline_spinner_html(
-                    "Reviewing Jobs...",
-                    f"{completed}/{status.get('total', 1)} reviewed",
-                    compact=True,
-                )
-                st.progress(prog, text=f"{completed}/{status.get('total', 1)} reviewed")
-                st.caption(f"📍 `{cur}`")
-                st.caption("💡 *You can freely browse other pages while this runs.*")
+                st.markdown(f"⚡ **Pipeline:** {completed}/{total} Jobs")
+                st.progress(prog)
                 if st.button("🛑 Stop Review", key="btn_cancel_global_pipeline", width="stretch"):
                     pipeline_manager.cancel()
                     st.rerun()
 
-    # 3. If a completion batch exists, show a quick action card in the sidebar
+    # If a completion batch exists, show a quick action card in the sidebar
     elif "completion_batch" in st.session_state and st.session_state["completion_batch"].get("jobs"):
         batch = st.session_state["completion_batch"]
         count = len(batch.get("jobs", []))
         src = batch.get("source", "Pipeline")
-        was_cancelled = batch.get("was_cancelled", False)
         with st.container(border=True):
-            if was_cancelled:
-                st.info(f"⏹️ **{count}** jobs saved before review was stopped ({src}).")
-            else:
-                st.success(f"🎉 **{count}** jobs ready ({src})!")
+            st.success(f"🎉 **{count}** jobs ready ({src})!")
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("📂 Job History", key="sb_view_hist", width="stretch"):
+                if st.button("📁 Evaluations", key="sb_view_hist", width="stretch"):
                     st.session_state["active_history_source"] = src
                     st.switch_page("pages/2_history.py")
             with col2:
@@ -1010,26 +1295,17 @@ def setup_sidebar():
             save_local_config(updated_key)
             st.session_state["user_api_key"] = updated_key
 
-        col_sb_save, col_sb_test = st.sidebar.columns([1, 1])
-        with col_sb_save:
-            if st.button("💾 Save Key", key="btn_sb_save_key", width="stretch"):
-                val = (st.session_state.get("temp_api_key_input") or "").strip().strip("'\"")
-                if val:
-                    save_local_config(val)
-                    st.session_state["user_api_key"] = val
-                    st.toast("API key saved to .env! ✅", icon="💾")
-        with col_sb_test:
-            if st.button("🧪 Test", key="btn_sb_test_key", width="stretch"):
-                val = (st.session_state.get("temp_api_key_input") or "").strip().strip("'\"")
-                if val:
-                    save_local_config(val)
-                    st.session_state["user_api_key"] = val
-                with st.spinner("Testing..."):
-                    ok, msg = test_ai_connection(st.session_state["model_choice"], val)
-                    if ok:
-                        st.sidebar.success("Connected! ✅")
-                    else:
-                        st.sidebar.error(f"❌ {msg[:120]}")
+        if st.sidebar.button("🧪 Test Connection", key="btn_sb_test_key", width="stretch"):
+            val = (st.session_state.get("temp_api_key_input") or "").strip().strip("'\"")
+            if val:
+                save_local_config(val)
+                st.session_state["user_api_key"] = val
+            with st.sidebar.spinner("Testing..."):
+                ok, msg = test_ai_connection(st.session_state["model_choice"], val)
+                if ok:
+                    st.sidebar.success("Connected! ✅")
+                else:
+                    st.sidebar.error(f"❌ {msg[:120]}")
 
         with st.sidebar.expander("⚙️ Advanced Settings"):
             if "sb_model_override" not in st.session_state:
@@ -1216,18 +1492,7 @@ def enforce_onboarding():
                 st.session_state["onboarding_resume_text_buffer"] = extracted_resume_text
                 st.toast(f"Extracted resume from {uploaded_resume_file.name}!", icon="📄")
 
-        # 2. 1-Click Sample Resumes
-        st.markdown("##### 🧪 Or Test-Drive Skippy with a Sample Resume:")
-        st.caption("Don't have a resume file on this computer? Choose a realistic sample profile to test drive Skippy right away:")
-        sample_cols = st.columns(4)
-        sample_keys = list(SAMPLE_RESUMES.keys())
-        for idx, s_name in enumerate(sample_keys):
-            with sample_cols[idx]:
-                if st.button(f"📄 {s_name}", key=f"btn_sample_resume_{idx}", width="stretch"):
-                    st.session_state["onboarding_resume_text_buffer"] = SAMPLE_RESUMES[s_name]
-                    st.toast(f"Loaded '{s_name}' sample resume!", icon="✅")
-
-        # 3. Text Area
+        # 2. Text Area (Review, Edit, or Paste Directly)
         current_buffer = st.session_state.get("onboarding_resume_text_buffer", "")
         with st.form("onboarding_resume_form"):
             initial_resume = st.text_area(
@@ -1241,7 +1506,7 @@ def enforce_onboarding():
 
             if saved:
                 if not initial_resume.strip():
-                    st.warning("Please upload a file, pick a sample, or paste your resume before proceeding.")
+                    st.warning("Please upload a file or paste your resume before proceeding.")
                 else:
                     st.session_state.resume_text = initial_resume
                     save_resumes({"Master Resume": initial_resume})
@@ -1266,23 +1531,16 @@ def enforce_onboarding():
             "Let AI discover your profile from your resume in 1 click, choose a career field, or answer 7 quick questions."
         )
 
-        onboarding_hint = st.text_input(
-            "🎯 Industry, Trade, or Field Focus (Optional Guidance)",
-            placeholder="e.g. Subsea Robotics, Watchmaking, Ammonia Refrigeration, Fire Protection (or leave blank to infer from resume)",
-            key="onboarding_industry_hint",
-            help="Provide your specific trade or industry if you work in a specialized field."
-        )
-
         # Primary Hero Action: Auto-Detect
         with st.container(border=True):
             st.markdown("### ⚡ Auto-Detect Career Profile from Resume (Recommended)")
-            st.caption("AI reads the resume you just added to identify your career field, licenses, specialized tools, and core competencies automatically.")
-            if st.button("⚡ 1-Click Auto-Detect Career Profile", type="primary", width="stretch", key="btn_onboard_hero_autodetect"):
+            st.caption("AI analyzes your uploaded master resume to automatically identify your career field, licenses, specialized tools, and core competencies.")
+            if st.button("⚡ Generate Career Profile with AI", type="primary", width="stretch", key="btn_onboard_hero_autodetect"):
                 with st.spinner("Setting up your career profile..."):
                     detected_profile = career_compass.auto_detect_alignment_from_resume(
                         st.session_state.get("resume_text", ""),
                         use_ai=True,
-                        industry_hint=onboarding_hint,
+                        industry_hint="",
                         model_choice=st.session_state.get("model_choice"),
                         api_key=st.session_state.get("user_api_key")
                     )

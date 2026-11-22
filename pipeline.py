@@ -1,10 +1,8 @@
-import os
-import sys
 import time
 import threading
 import concurrent.futures
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Optional
 
 from playwright.sync_api import sync_playwright
 
@@ -13,6 +11,23 @@ from scraper import scrape_job_with_guard, normalize_linkedin_job_id
 from posting_guard import guard as run_posting_guard
 from evaluator import evaluate_job
 from webhook import remove_inbox_job_by_url
+
+
+def _format_friendly_error(err: Exception, model_choice: str = "") -> str:
+    err_str = str(err)
+    err_low = err_str.lower()
+    is_gemini = "gemini" in (model_choice or "").lower() or "gemini" in err_low
+    if any(x in err_low for x in ("rate_limit", "ratelimit", "429", "resource_exhausted", "quota")):
+        if is_gemini:
+            return "Rate limit reached (Free Tier). Add $5 credit to Google AI Studio for 1,000+ RPM with no limits."
+        return "Rate limit reached on AI provider. Please check your billing or plan limits."
+    if "api_key_invalid" in err_low or "401" in err_str:
+        return "Invalid API key. Please check your key in settings."
+    if "403" in err_str or "permission_denied" in err_low:
+        if is_gemini:
+            return "Permission denied (403). Make sure the Gemini API is enabled for this key."
+        return "Permission denied (403). Please verify your API key permissions."
+    return err_str[:120]
 
 
 class PipelineManager:
@@ -37,6 +52,8 @@ class PipelineManager:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        # Shared cap so stopping and restarting a batch never stacks >4 concurrent cloud LLM calls
+        self._llm_semaphore = threading.Semaphore(4)
 
         # State attributes
         self.is_running: bool = False
@@ -122,12 +139,13 @@ class PipelineManager:
             self.finish_timestamp = None
             self.has_unnotified_completion = False
             self.last_error = None
-            self._stop_event.clear()
+            run_stop_event = threading.Event()
+            self._stop_event = run_stop_event
 
         self._thread = threading.Thread(
             target=target_fn,
             args=(items, resume_text, system_instructions, model_choice,
-                  api_key, local_base_url, local_model_name, model_override, source, matched_resumes, on_item_saved),
+                  api_key, local_base_url, local_model_name, model_override, source, matched_resumes, on_item_saved, run_stop_event),
             daemon=True
         )
         self._thread.start()
@@ -226,8 +244,9 @@ class PipelineManager:
     def _run_url_worker(
         self, urls, resume_text, system_instructions, model_choice,
         api_key, local_base_url, local_model_name, model_override, source, matched_resumes="",
-        on_item_saved=None
+        on_item_saved=None, run_stop_event=None
     ):
+        stop_evt = run_stop_event if run_stop_event is not None else self._stop_event
         playwright_ctx = None
         browser = None
         shared_page = None
@@ -236,30 +255,42 @@ class PipelineManager:
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         pending = {}
 
+        def _evaluate_guarded(**eval_kwargs):
+            if stop_evt.is_set():
+                return None
+            with self._llm_semaphore:
+                if stop_evt.is_set():
+                    return None
+                return evaluate_job(**eval_kwargs)
+
         def _drain(block: bool):
             done, _ = concurrent.futures.wait(
                 list(pending), timeout=0.15 if block else 0, return_when=concurrent.futures.FIRST_COMPLETED
             )
             for fut in done:
                 url_, job_text_, p_title, p_company = pending.pop(fut)
-                if self._stop_event.is_set():
+                if stop_evt.is_set():
                     continue
                 try:
+                    eval_result = fut.result()
+                    if eval_result is None or stop_evt.is_set():
+                        continue
                     self._persist_evaluation_result(
-                        result=fut.result(), url=url_, job_text=job_text_, source=source,
+                        result=eval_result, url=url_, job_text=job_text_, source=source,
                         preset_title=p_title, preset_company=p_company, matched_resumes=matched_resumes,
                     )
                     if on_item_saved:
                         on_item_saved(url_)
                 except Exception as e:
-                    print(f"[Pipeline Error] {url_}: {e}")
+                    friendly_err = _format_friendly_error(e, model_choice)
+                    print(f"[Pipeline Error] {url_}: {friendly_err}")
                     with self._lock:
                         self.failed_jobs += 1
-                        self.last_error = str(e)
+                        self.last_error = friendly_err
 
         try:
             for i, item in enumerate(urls):
-                if self._stop_event.is_set():
+                if stop_evt.is_set():
                     break
 
                 if isinstance(item, dict):
@@ -281,7 +312,7 @@ class PipelineManager:
                     self.current_job_name = display_label
 
                 # Immediate check before scraping
-                if self._stop_event.is_set():
+                if stop_evt.is_set():
                     break
 
                 if raw_text and (len(raw_text.strip()) > 50 or on_item_saved is not None):
@@ -307,7 +338,7 @@ class PipelineManager:
                             job_text = f"Error launching browser fallback: {pw_err}"
 
                 # Immediate check right after scraping
-                if self._stop_event.is_set():
+                if stop_evt.is_set():
                     break
 
                 all_sec_flags = []
@@ -317,7 +348,7 @@ class PipelineManager:
 
                 if not job_text.startswith("Error"):
                     pending[executor.submit(
-                        evaluate_job,
+                        _evaluate_guarded,
                         resume_text=resume_text,
                         job_text=job_text,
                         system_instructions=system_instructions,
@@ -330,7 +361,7 @@ class PipelineManager:
                         skip_guard=True,
                     )] = (url, job_text, preset_title, preset_company)
                     # Keep at most max_workers evaluations in flight
-                    while len(pending) >= max_workers and not self._stop_event.is_set():
+                    while len(pending) >= max_workers and not stop_evt.is_set():
                         _drain(block=True)
                 else:
                     print(f"[Pipeline Warning] Skipped {url}: {job_text}")
@@ -339,12 +370,13 @@ class PipelineManager:
                         self.last_error = job_text
                 _drain(block=False)
 
-            while pending and not self._stop_event.is_set():
+            while pending and not stop_evt.is_set():
                 _drain(block=True)
         except Exception as e:
-            print(f"[Pipeline Fatal Error]: {e}")
+            friendly_err = _format_friendly_error(e, model_choice)
+            print(f"[Pipeline Fatal Error]: {friendly_err}")
             with self._lock:
-                self.last_error = str(e)
+                self.last_error = friendly_err
         finally:
             try:
                 executor.shutdown(wait=False, cancel_futures=True)
@@ -361,11 +393,12 @@ class PipelineManager:
                 except Exception:
                     pass
             with self._lock:
-                self.is_running = False
-                self.is_stopping = False
-                self.was_cancelled = self._stop_event.is_set()
-                self.finish_timestamp = time.time()
-                self.has_unnotified_completion = True
+                if self._stop_event is stop_evt:
+                    self.is_running = False
+                    self.is_stopping = False
+                    self.was_cancelled = stop_evt.is_set()
+                    self.finish_timestamp = time.time()
+                    self.has_unnotified_completion = True
 
 
 # Global singleton instance

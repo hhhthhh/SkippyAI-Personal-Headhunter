@@ -9,15 +9,11 @@ import pandas as pd
 import streamlit as st
 
 from utils import (
-    render_completion_card,
-    check_and_handle_pipeline_completion,
     render_resume_selector,
     combine_selected_resumes,
     render_active_prompt_indicator,
     initialize_core_state,
-    render_pipeline_spinner_html,
     start_scraper_evaluations as process_evaluations,
-    render_active_scraper_pipeline_banner,
 )
 import database as db
 from scraper import (
@@ -29,8 +25,6 @@ from scraper import (
 )
 from posting_guard import guard as run_posting_guard
 from evaluator import evaluate_job
-from pipeline import pipeline_manager
-from sample_data import SAMPLE_JOBS
 
 if "system_instructions" not in st.session_state:
     initialize_core_state()
@@ -46,16 +40,6 @@ if "native_search_results" not in st.session_state or not st.session_state["nati
         st.session_state["native_search_results"] = cached_scraper_results
         st.session_state["native_search_source_label"] = cached_scraper_results[0].get("source_board") or cached_scraper_results[0].get("source") or "Job Board Search"
 
-
-render_active_scraper_pipeline_banner("stop_scraper_pipeline_main")
-
-# Accessible Completion Card displayed if a run just completed
-if "completion_batch" in st.session_state:
-    render_completion_card(
-        st.session_state["completion_batch"]["jobs"],
-        source_label=st.session_state["completion_batch"]["source"]
-    )
-    st.markdown("---")
 
 # Quick-Start Guide for first-time or new users
 show_quick_start = st.session_state.get("show_quick_start", False)
@@ -86,16 +70,6 @@ if (show_quick_start or not has_evaluated_jobs) and not dismissed:
             st.markdown("##### 3. Get Your Pack")
             st.caption("In **Job History**, download your fact-checked ATS resume, custom cover letter, and STAR interview prep.")
 
-        st.markdown("")
-        col_demo, _ = st.columns([2.5, 4])
-        with col_demo:
-            if st.button("🧪 Try a Sample Job Listing", type="secondary", width="stretch", help="Pre-populates a sample job description so you can test the review engine immediately."):
-                sample_job = SAMPLE_JOBS[0]
-                st.session_state["manual_job_text_input"] = sample_job["text"]
-                st.session_state["scraper_mode_radio"] = "📝 Paste Job Text"
-                st.toast(f"Loaded '{sample_job['title']}' sample job posting!", icon="📋")
-                st.rerun()
-
     st.markdown("---")
 
 mode_options = [
@@ -118,16 +92,13 @@ selected_mode = st.radio(
 
 
 def render_verified_sites_guide():
-    with st.expander("ℹ️ Supported Websites & Built-in Safety Shield", expanded=False):
-        st.markdown("""
-        - **🔎 Live Job Board Search (100% Free, No Login Needed):**
-          - **LinkedIn Public Search:** Search live postings by role, location, workplace mode (`Remote`/`Hybrid`/`On-site`), and recency without logging in.
-          - **Direct Company Career Pages:** Browse openings directly from company hiring boards (Greenhouse, Ashby, Lever).
-          - **FreeHire Tech Search:** Search tech & engineering postings worldwide with full job descriptions.
-        - **🌐 Multi-Link & Category Search:** Supports **Built In** (`builtin.com`), direct **LinkedIn** job links, and public company career pages.
-        - **🧩 LinkedIn Extension Inbox:** If you prefer browsing LinkedIn logged in, use the **🔗 LinkedIn Inbox** in the sidebar to capture jobs with a single right-click.
-        - **🛡️ Job Text Safety Shield:** Every job description is automatically cleaned to remove hidden text, invisible symbols, and malicious commands before sending to the AI.
-        """)
+    with st.expander("ℹ️ Supported Search Boards & Built-in Safety Shield", expanded=False):
+        st.markdown(
+            "- **Live Search Boards:** LinkedIn Public Search (no account needed), Direct Career Boards (Greenhouse, Ashby, Lever), and FreeHire API.\n"
+            "- **Direct Links:** Paste direct URLs from Built In, LinkedIn (`/jobs/view/...`), or company career pages.\n"
+            "- **Extension Inbox:** Capture postings directly from your browser with 1-click via the Skippy extension.\n"
+            "- **Job Text Safety Shield:** Automatically sanitizes job descriptions, stripping invisible prompt injection and tracking artifacts."
+        )
 
 
 render_verified_sites_guide()
@@ -144,233 +115,251 @@ DATE_POSTED_MAP = {
 }
 
 if selected_mode == "🔎 Job Board Search":
-    st.subheader("🔎 Live Job Board Search")
-    st.caption("Search live postings across LinkedIn, Company Career Pages (Greenhouse, Ashby, Lever), and FreeHire—zero account or API keys required.")
+    st.subheader("🔎 LinkedIn Search")
+    st.caption("Search live job postings across LinkedIn public job boards—zero account or API keys required.")
 
-    portal_choice = st.radio(
-        "Job Portal Source:",
-        [
-            "🔗 LinkedIn (Global Search — No Login Needed)",
-            "🏢 Direct Company Hiring Pages (Greenhouse · Ashby · Lever — No Login)",
-            "🌍 FreeHire (Tech Jobs)",
-        ],
-        horizontal=True,
-        key="native_portal_choice"
-    )
+    user_prof = st.session_state.get("user_profile")
+    if user_prof and user_prof.get("search_queries"):
+        st.caption(f"🎯 **Recommended Roles for Your Profile ({user_prof.get('industry_title') or user_prof.get('archetype_title', 'Industry')}):**")
+        rec_roles = user_prof.get("search_queries", [])[:4]
+        r_cols = st.columns(len(rec_roles))
+        for idx, r in enumerate(rec_roles):
+            with r_cols[idx]:
+                if st.button(f"{r}", key=f"qf_compass_li_{idx}", width="stretch"):
+                    st.session_state["li_search_query"] = r
+                    st.rerun()
 
-    is_linkedin = portal_choice.startswith("🔗")
-    is_ats = portal_choice.startswith("🏢")
+    with st.form("linkedin_guest_search_form"):
+        col_q, col_loc = st.columns(2)
+        with col_q:
+            li_query = st.text_input(
+                "Keywords / Role Title:",
+                value=st.session_state.get("li_search_query", ""),
+                placeholder="e.g., Registered Nurse, Corporate Counsel, Operations Manager, SOC Analyst"
+            )
+        with col_loc:
+            li_location = st.text_input(
+                "Location:",
+                value=st.session_state.get("li_search_location", "United States"),
+                placeholder="e.g., United States, Remote, New York, London"
+            )
 
-    if is_linkedin:
-        user_prof = st.session_state.get("user_profile")
-        if user_prof and user_prof.get("search_queries"):
-            st.caption(f"🎯 **Recommended Roles for Your Profile ({user_prof.get('industry_title') or user_prof.get('archetype_title', 'Industry')}):**")
-            rec_roles = user_prof.get("search_queries", [])[:4]
-            r_cols = st.columns(len(rec_roles))
-            for idx, r in enumerate(rec_roles):
-                with r_cols[idx]:
-                    if st.button(f"{r}", key=f"qf_compass_li_{idx}", width="stretch"):
-                        st.session_state["li_search_query"] = r
-                        st.rerun()
+        col_wt, col_age, col_lim = st.columns(3)
+        with col_wt:
+            li_work_mode = st.selectbox("Workplace Type:", ["Any", "Remote", "Hybrid", "On-site"])
+        with col_age:
+            li_age_label = st.selectbox("Date Posted:", list(DATE_POSTED_MAP.keys()), index=2)
+        with col_lim:
+            li_limit = st.selectbox("Max Search Results:", [10, 20, 30, 50], index=1)
 
-        with st.form("linkedin_guest_search_form"):
-            col_q, col_loc = st.columns(2)
-            with col_q:
-                li_query = st.text_input(
-                    "Keywords / Role Title:",
-                    value=st.session_state.get("li_search_query", ""),
-                    placeholder="e.g., Registered Nurse, Corporate Counsel, Operations Manager, SOC Analyst"
-                )
-            with col_loc:
-                li_location = st.text_input(
-                    "Location:",
-                    value=st.session_state.get("li_search_location", "United States"),
-                    placeholder="e.g., United States, Remote, New York, London"
-                )
+        search_submitted = st.form_submit_button("🔍 Search LinkedIn Jobs", type="primary", width="stretch")
 
-            col_wt, col_age, col_lim = st.columns(3)
-            with col_wt:
-                li_work_mode = st.selectbox("Workplace Type:", ["Any", "Remote", "Hybrid", "On-site"])
-            with col_age:
-                li_age_label = st.selectbox("Date Posted:", list(DATE_POSTED_MAP.keys()), index=2)
-            with col_lim:
-                li_limit = st.selectbox("Max Search Results:", [10, 20, 30, 50], index=1)
-
-            search_submitted = st.form_submit_button("🔍 Search LinkedIn Jobs", type="primary", width="stretch")
-
-        if search_submitted:
-            st.session_state["li_search_query"] = li_query
-            st.session_state["li_search_location"] = li_location
-            if not li_location.strip() and not li_query.strip():
-                st.warning("Please provide at least a keyword or location to search.")
-            else:
-                with st.spinner("Searching LinkedIn public job board..."):
-                    try:
-                        eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
-                        seen_urls, seen_li_ids = db.load_seen_job_identifiers()
-                        remote_param = "" if li_work_mode == "Any" else li_work_mode.lower()
-                        results = search_linkedin_guest(
-                            query=li_query.strip(),
-                            location=li_location.strip() or "United States",
-                            remote=remote_param,
-                            jobage_days=DATE_POSTED_MAP.get(li_age_label, 0),
-                            limit=int(li_limit),
-                            evaluated_ids=eval_li_ids,
-                            seen_ids=seen_li_ids,
-                        )
-                        db.record_seen_postings(results)
-                        db.save_scraper_results(results, "LinkedIn Guest Search")
-                        st.session_state["native_search_results"] = db.load_scraper_results()
-                        st.session_state["native_search_source_label"] = "LinkedIn Guest Search"
-                        st.session_state.pop("scraper_results_cleared", None)
-                        if not results:
-                            st.info("No matching LinkedIn postings found. Try broadening your keywords, location, or date filter.")
-                        else:
-                            st.switch_page("pages/7_scraper_results.py")
-                    except Exception as e:
-                        st.error(f"LinkedIn search failed: {e}")
-
-    elif is_ats:
-        st.caption("⚡ **Popular Company Career Boards (Click to Quick-Fill):**")
-        b1, b2, b3, b4 = st.columns(4)
-        with b1:
-            if st.button("🏢 Anthropic (GH)", key="ats_qf_anthropic", width="stretch"):
-                st.session_state["ats_board_input"] = "anthropic"
-                st.session_state["ats_platform_choice"] = "Greenhouse"
-                st.rerun()
-        with b2:
-            if st.button("🤖 OpenAI (Ashby)", key="ats_qf_openai", width="stretch"):
-                st.session_state["ats_board_input"] = "openai"
-                st.session_state["ats_platform_choice"] = "Ashby"
-                st.rerun()
-        with b3:
-            if st.button("🛡️ Palantir (Lever)", key="ats_qf_palantir", width="stretch"):
-                st.session_state["ats_board_input"] = "palantir"
-                st.session_state["ats_platform_choice"] = "Lever"
-                st.rerun()
-        with b4:
-            if st.button("💳 Stripe (GH)", key="ats_qf_stripe", width="stretch"):
-                st.session_state["ats_board_input"] = "stripe"
-                st.session_state["ats_platform_choice"] = "Greenhouse"
-                st.rerun()
-
-        with st.form("ats_board_search_form"):
-            col_b, col_p, col_lim = st.columns([2, 1, 1])
-            with col_b:
-                board_input = st.text_input(
-                    "Company Board Slug or URL:",
-                    value=st.session_state.get("ats_board_input", ""),
-                    placeholder="e.g. anthropic, jobs.ashbyhq.com/openai, or boards.greenhouse.io/gitlab",
-                    help="Enter the company name slug or paste the direct career board link."
-                )
-            with col_p:
-                plat_options = ["Auto-Detect", "Greenhouse", "Ashby", "Lever"]
-                curr_plat = st.session_state.get("ats_platform_choice", "Auto-Detect")
-                p_idx = plat_options.index(curr_plat) if curr_plat in plat_options else 0
-                ats_platform = st.selectbox("ATS Platform:", plat_options, index=p_idx)
-            with col_lim:
-                ats_limit = st.selectbox("Max Roles:", [15, 30, 50, 100], index=1)
-
-            ats_submitted = st.form_submit_button("🔍 Load Company Job Openings", type="primary", width="stretch")
-
-        if ats_submitted:
-            st.session_state["ats_board_input"] = board_input
-            st.session_state["ats_platform_choice"] = ats_platform
-            if not board_input.strip():
-                st.warning("Please provide a company board name slug or career board URL.")
-            else:
-                with st.spinner(f"Loading public openings for '{board_input.strip()}'..."):
-                    try:
-                        eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
-                        seen_urls, seen_li_ids = db.load_seen_job_identifiers()
-                        results = fetch_ats_board_jobs(
-                            platform=ats_platform.lower(),
-                            token_or_url=board_input.strip(),
-                            limit=int(ats_limit),
-                            evaluated_urls=eval_urls,
-                            seen_urls=seen_urls,
-                        )
-                        if not results:
-                            st.info(f"No active postings found for board '{board_input.strip()}'. Verify the slug or try a direct board URL.")
-                        else:
-                            db.record_seen_postings(results)
-                            source_lbl = results[0].get("source", f"ATS ({board_input.strip()})")
-                            db.save_scraper_results(results, source_lbl)
-                            st.session_state["native_search_results"] = db.load_scraper_results()
-                            st.session_state["native_search_source_label"] = source_lbl
-                            st.session_state.pop("scraper_results_cleared", None)
-                            st.switch_page("pages/7_scraper_results.py")
-                    except Exception as e:
-                        st.error(f"Failed to load career board: {e}")
-
-    else:
-        user_prof = st.session_state.get("user_profile")
-        if user_prof and user_prof.get("search_queries"):
-            st.caption(f"🎯 **Recommended Roles for Your Profile ({user_prof.get('industry_title') or user_prof.get('archetype_title', 'Industry')}):**")
-            rec_roles = user_prof.get("search_queries", [])[:4]
-            r_cols = st.columns(len(rec_roles))
-            for idx, r in enumerate(rec_roles):
-                with r_cols[idx]:
-                    if st.button(f"{r}", key=f"qf_compass_fh_{idx}", width="stretch"):
-                        st.session_state["fh_search_query"] = r
-                        st.rerun()
-
-        with st.form("freehire_search_form"):
-            col_q, col_reg, col_sen = st.columns([2, 1, 1])
-            with col_q:
-                fh_query = st.text_input(
-                    "Keywords / Domain Stack / Role:",
-                    value=st.session_state.get("fh_search_query", ""),
-                    placeholder="e.g., Operations, Healthcare, Legal, Python, Security, Supply Chain"
-                )
-            with col_reg:
-                fh_region = st.selectbox(
-                    "Region:",
-                    ["Any", "north_america", "global", "eu", "uk", "apac", "latam", "mena"]
-                )
-            with col_sen:
-                fh_seniority = st.selectbox(
-                    "Seniority:",
-                    ["Any", "entry", "mid", "senior", "staff", "lead"]
-                )
-
-            col_wt, col_age, col_lim = st.columns(3)
-            with col_wt:
-                fh_work_mode = st.selectbox("Workplace Type:", ["Any", "Remote", "Hybrid", "Onsite"])
-            with col_age:
-                fh_age_label = st.selectbox("Date Posted:", list(DATE_POSTED_MAP.keys()), index=2)
-            with col_lim:
-                fh_limit = st.selectbox("Max Search Results:", [10, 25, 50], index=1)
-
-            search_submitted = st.form_submit_button("🔍 Search FreeHire Jobs", type="primary", width="stretch")
-
-        if search_submitted:
-            st.session_state["fh_search_query"] = fh_query
-            with st.spinner("Searching FreeHire jobs (with full descriptions)..."):
+    if search_submitted:
+        st.session_state["li_search_query"] = li_query
+        st.session_state["li_search_location"] = li_location
+        if not li_location.strip() and not li_query.strip():
+            st.warning("Please provide at least a keyword or location to search.")
+        else:
+            with st.spinner("Searching LinkedIn public job board..."):
                 try:
                     eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
                     seen_urls, seen_li_ids = db.load_seen_job_identifiers()
-                    results = search_freehire_jobs(
-                        query=fh_query.strip(),
-                        work_mode="" if fh_work_mode == "Any" else fh_work_mode.lower(),
-                        region="" if fh_region == "Any" else fh_region,
-                        seniority="" if fh_seniority == "Any" else fh_seniority,
-                        jobage_days=DATE_POSTED_MAP.get(fh_age_label, 0),
-                        limit=int(fh_limit),
-                        evaluated_ids=eval_urls | eval_li_ids,
-                        seen_ids=seen_urls | seen_li_ids,
+                    remote_param = "" if li_work_mode == "Any" else li_work_mode.lower()
+                    results = search_linkedin_guest(
+                        query=li_query.strip(),
+                        location=li_location.strip() or "United States",
+                        remote=remote_param,
+                        jobage_days=DATE_POSTED_MAP.get(li_age_label, 0),
+                        limit=int(li_limit),
+                        evaluated_ids=eval_li_ids,
+                        seen_ids=seen_li_ids,
                     )
-                    db.record_seen_postings(results)
-                    db.save_scraper_results(results, "FreeHire API")
-                    st.session_state["native_search_results"] = db.load_scraper_results()
-                    st.session_state["native_search_source_label"] = "FreeHire API"
+                    saved_ok = db.save_scraper_results(results, "LinkedIn Guest Search")
+                    st.session_state["native_search_results"] = db.load_scraper_results() if saved_ok else results
+                    st.session_state["native_search_source_label"] = "LinkedIn Guest Search"
                     st.session_state.pop("scraper_results_cleared", None)
+                    if not saved_ok:
+                        st.warning("⚠️ Search succeeded, but saving results to the database failed. Results are shown in memory for this session.")
                     if not results:
-                        st.info("No matching FreeHire postings found. Try broadening your filters or keywords.")
+                        st.info("No matching LinkedIn postings found. Try broadening your keywords, location, or date filter.")
                     else:
-                        st.switch_page("pages/7_scraper_results.py")
+                        st.toast(f"Found {len(results)} jobs! Review them below.", icon="📋")
+                        st.rerun()
                 except Exception as e:
-                    st.error(f"FreeHire search failed: {e}")
+                    st.error(f"LinkedIn search failed: {e}")
+
+    # Collapsed Submenu for Advanced Users: Direct Company Hiring Pages & FreeHire
+    adv_expanded = bool(
+        st.session_state.get("expand_advanced_portals", False)
+        or st.session_state.get("ats_board_input")
+        or st.session_state.get("fh_search_query")
+    )
+    with st.expander("⚙️ Advanced Search Portals (Company Career Pages & FreeHire)", expanded=adv_expanded):
+        st.caption("Specialized search tools for direct company career boards (Greenhouse, Ashby, Lever) and tech job databases.")
+        adv_portal_choice = st.radio(
+            "Select Advanced Search Portal:",
+            [
+                "🏢 Direct Company Hiring Pages (Greenhouse · Ashby · Lever — No Login)",
+                "🌍 FreeHire (Tech Jobs)",
+            ],
+            horizontal=True,
+            key="native_adv_portal_choice"
+        )
+
+        is_ats = adv_portal_choice.startswith("🏢")
+
+        if is_ats:
+            st.caption("⚡ **Popular Company Career Boards (Click to Quick-Fill):**")
+            b1, b2, b3, b4 = st.columns(4)
+            with b1:
+                if st.button("🏢 Anthropic (GH)", key="ats_qf_anthropic", width="stretch"):
+                    st.session_state["ats_board_input"] = "anthropic"
+                    st.session_state["ats_platform_choice"] = "Greenhouse"
+                    st.session_state["expand_advanced_portals"] = True
+                    st.rerun()
+            with b2:
+                if st.button("🤖 OpenAI (Ashby)", key="ats_qf_openai", width="stretch"):
+                    st.session_state["ats_board_input"] = "openai"
+                    st.session_state["ats_platform_choice"] = "Ashby"
+                    st.session_state["expand_advanced_portals"] = True
+                    st.rerun()
+            with b3:
+                if st.button("🛡️ Palantir (Lever)", key="ats_qf_palantir", width="stretch"):
+                    st.session_state["ats_board_input"] = "palantir"
+                    st.session_state["ats_platform_choice"] = "Lever"
+                    st.session_state["expand_advanced_portals"] = True
+                    st.rerun()
+            with b4:
+                if st.button("💳 Stripe (GH)", key="ats_qf_stripe", width="stretch"):
+                    st.session_state["ats_board_input"] = "stripe"
+                    st.session_state["ats_platform_choice"] = "Greenhouse"
+                    st.session_state["expand_advanced_portals"] = True
+                    st.rerun()
+
+            with st.form("ats_board_search_form"):
+                col_b, col_p, col_lim = st.columns([2, 1, 1])
+                with col_b:
+                    board_input = st.text_input(
+                        "Company Board Slug or URL:",
+                        value=st.session_state.get("ats_board_input", ""),
+                        placeholder="e.g. anthropic, jobs.ashbyhq.com/openai, or boards.greenhouse.io/gitlab",
+                        help="Enter the company name slug or paste the direct career board link."
+                    )
+                with col_p:
+                    plat_options = ["Auto-Detect", "Greenhouse", "Ashby", "Lever"]
+                    curr_plat = st.session_state.get("ats_platform_choice", "Auto-Detect")
+                    p_idx = plat_options.index(curr_plat) if curr_plat in plat_options else 0
+                    ats_platform = st.selectbox("ATS Platform:", plat_options, index=p_idx)
+                with col_lim:
+                    ats_limit = st.selectbox("Max Roles:", [15, 30, 50, 100], index=1)
+
+                ats_submitted = st.form_submit_button("🔍 Load Company Job Openings", type="primary", width="stretch")
+
+            if ats_submitted:
+                st.session_state["ats_board_input"] = board_input
+                st.session_state["ats_platform_choice"] = ats_platform
+                st.session_state["expand_advanced_portals"] = True
+                if not board_input.strip():
+                    st.warning("Please provide a company board name slug or career board URL.")
+                else:
+                    with st.spinner(f"Loading public openings for '{board_input.strip()}'..."):
+                        try:
+                            eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
+                            seen_urls, seen_li_ids = db.load_seen_job_identifiers()
+                            results = fetch_ats_board_jobs(
+                                platform=ats_platform.lower(),
+                                token_or_url=board_input.strip(),
+                                limit=int(ats_limit),
+                                evaluated_urls=eval_urls,
+                                seen_urls=seen_urls,
+                            )
+                            if not results:
+                                st.info(f"No active postings found for board '{board_input.strip()}'. Verify the slug or try a direct board URL.")
+                            else:
+                                source_lbl = results[0].get("source", f"ATS ({board_input.strip()})")
+                                saved_ok = db.save_scraper_results(results, source_lbl)
+                                st.session_state["native_search_results"] = db.load_scraper_results() if saved_ok else results
+                                st.session_state["native_search_source_label"] = source_lbl
+                                st.session_state.pop("scraper_results_cleared", None)
+                                if not saved_ok:
+                                    st.warning("⚠️ Board loaded, but saving results to the database failed. Results are shown in memory for this session.")
+                                st.toast(f"Found {len(results)} jobs! Review them below.", icon="📋")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to load career board: {e}")
+
+        else:
+            user_prof = st.session_state.get("user_profile")
+            if user_prof and user_prof.get("search_queries"):
+                st.caption(f"🎯 **Recommended Roles for Your Profile ({user_prof.get('industry_title') or user_prof.get('archetype_title', 'Industry')}):**")
+                rec_roles = user_prof.get("search_queries", [])[:4]
+                r_cols = st.columns(len(rec_roles))
+                for idx, r in enumerate(rec_roles):
+                    with r_cols[idx]:
+                        if st.button(f"{r}", key=f"qf_compass_fh_{idx}", width="stretch"):
+                            st.session_state["fh_search_query"] = r
+                            st.session_state["expand_advanced_portals"] = True
+                            st.rerun()
+
+            with st.form("freehire_search_form"):
+                col_q, col_reg, col_sen = st.columns([2, 1, 1])
+                with col_q:
+                    fh_query = st.text_input(
+                        "Keywords / Domain Stack / Role:",
+                        value=st.session_state.get("fh_search_query", ""),
+                        placeholder="e.g., Operations, Healthcare, Legal, Python, Security, Supply Chain"
+                    )
+                with col_reg:
+                    fh_region = st.selectbox(
+                        "Region:",
+                        ["Any", "north_america", "global", "eu", "uk", "apac", "latam", "mena"]
+                    )
+                with col_sen:
+                    fh_seniority = st.selectbox(
+                        "Seniority:",
+                        ["Any", "entry", "mid", "senior", "staff", "lead"]
+                    )
+
+                col_wt, col_age, col_lim = st.columns(3)
+                with col_wt:
+                    fh_work_mode = st.selectbox("Workplace Type:", ["Any", "Remote", "Hybrid", "Onsite"])
+                with col_age:
+                    fh_age_label = st.selectbox("Date Posted:", list(DATE_POSTED_MAP.keys()), index=2)
+                with col_lim:
+                    fh_limit = st.selectbox("Max Search Results:", [10, 25, 50], index=1)
+
+                search_submitted = st.form_submit_button("🔍 Search FreeHire Jobs", type="primary", width="stretch")
+
+            if search_submitted:
+                st.session_state["fh_search_query"] = fh_query
+                st.session_state["expand_advanced_portals"] = True
+                with st.spinner("Searching FreeHire jobs (with full descriptions)..."):
+                    try:
+                        eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
+                        seen_urls, seen_li_ids = db.load_seen_job_identifiers()
+                        results = search_freehire_jobs(
+                            query=fh_query.strip(),
+                            work_mode="" if fh_work_mode == "Any" else fh_work_mode.lower(),
+                            region="" if fh_region == "Any" else fh_region,
+                            seniority="" if fh_seniority == "Any" else fh_seniority,
+                            jobage_days=DATE_POSTED_MAP.get(fh_age_label, 0),
+                            limit=int(fh_limit),
+                            evaluated_ids=eval_urls | eval_li_ids,
+                            seen_ids=seen_urls | seen_li_ids,
+                        )
+                        saved_ok = db.save_scraper_results(results, "FreeHire API")
+                        st.session_state["native_search_results"] = db.load_scraper_results() if saved_ok else results
+                        st.session_state["native_search_source_label"] = "FreeHire API"
+                        st.session_state.pop("scraper_results_cleared", None)
+                        if not saved_ok:
+                            st.warning("⚠️ Search succeeded, but saving results to the database failed. Results are shown in memory for this session.")
+                        if not results:
+                            st.info("No matching FreeHire postings found. Try broadening your filters or keywords.")
+                        else:
+                            st.toast(f"Found {len(results)} jobs! Review them below.", icon="📋")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"FreeHire search failed: {e}")
 
     # Navigation & quick links
     if not st.session_state.get("scraper_results_cleared"):
@@ -382,20 +371,201 @@ if selected_mode == "🔎 Job Board Search":
 
     discovered_jobs = st.session_state.get("native_search_results", [])
     st.markdown("---")
-    with st.container(border=True):
-        col_info, col_btn = st.columns([3, 1.4])
-        with col_info:
-            if discovered_jobs:
-                st.subheader("📋 Search Results Available")
-                st.write(f"You have **{len(discovered_jobs)}** jobs loaded in your search results. Review, filter, and choose which ones to score on the **Search Results** page.")
+    if discovered_jobs:
+        eval_urls, eval_li_ids = db.load_evaluated_job_identifiers()
+        seen_urls, seen_li_ids = db.load_seen_job_identifiers()
+        total_eval_vault = len(eval_urls)
+
+        st.subheader(f"📋 Discovered Postings")
+        source_label = st.session_state.get("native_search_source_label", "Job Board Search")
+        st.caption(
+            f"Accumulated search queue (latest search: **{source_label}**; click **🗑️ Clear** below to reset). "
+            f"Total evaluated jobs in vault across all intake sources: **{total_eval_vault}**."
+        )
+
+        for j in discovered_jobs:
+            raw_url = j.get("url") or j.get("original_url") or ""
+            lid = db.extract_linkedin_job_id(j.get("id") or raw_url)
+            norm_url = db.normalize_job_url(raw_url)
+            if (lid and lid in eval_li_ids) or (norm_url and norm_url in eval_urls):
+                j["status"] = "evaluated"
+            elif j.get("status") == "evaluated":
+                j["status"] = "seen" if ((lid and lid in seen_li_ids) or (norm_url and norm_url in seen_urls)) else "new"
+            elif j.get("status") not in ("new", "seen"):
+                j["status"] = "seen" if ((lid and lid in seen_li_ids) or (norm_url and norm_url in seen_urls)) else "new"
+
+        new_jobs = [j for j in discovered_jobs if j.get("status") == "new"]
+        seen_jobs = [j for j in discovered_jobs if j.get("status") == "seen"]
+        evaluated_jobs = [j for j in discovered_jobs if j.get("status") == "evaluated"]
+
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        col_m1.metric("Saved Search Queue", len(discovered_jobs), help="Accumulated postings across your searches until you click Clear")
+        col_m2.metric("🆕 New", len(new_jobs))
+        col_m3.metric("👁️ Seen", len(seen_jobs))
+        col_m4.metric("✅ Evaluated in Queue", f"{len(evaluated_jobs)} of {len(discovered_jobs)}", help=f"{len(evaluated_jobs)} of {len(discovered_jobs)} postings in your search queue have already been evaluated. (Total in Evaluations vault across all sources: {total_eval_vault})")
+
+        if len(evaluated_jobs) == len(discovered_jobs) and len(discovered_jobs) > 0:
+            st.info(
+                f"💡 **All {len(discovered_jobs)} postings in your saved search queue have already been evaluated.** "
+                f"You have **{total_eval_vault} total evaluated jobs** saved in **📁 Evaluations** (including Extension Inbox, Paste Links/Text, and archived postings). "
+                f"Run a new search above or click **🗑️ Clear** to reset the queue.",
+                icon="ℹ️"
+            )
+
+        default_filter_idx = 0 if len(new_jobs) > 0 else 1
+        filter_mode = st.radio(
+            "Filter View:",
+            ["🆕 New Only", "All Postings", "👁️ Seen", "✅ Evaluated"],
+            index=default_filter_idx,
+            format_func=lambda opt: {
+                "🆕 New Only": f"🆕 New Only ({len(new_jobs)})",
+                "All Postings": f"All Postings ({len(discovered_jobs)})",
+                "👁️ Seen": f"👁️ Seen ({len(seen_jobs)})",
+                "✅ Evaluated": f"✅ Evaluated ({len(evaluated_jobs)})",
+            }.get(opt, opt),
+            horizontal=True,
+            key="scraper_inpage_view_filter"
+        )
+
+        if filter_mode == "🆕 New Only":
+            displayed_jobs = new_jobs
+        elif filter_mode == "👁️ Seen":
+            displayed_jobs = seen_jobs
+        elif filter_mode == "✅ Evaluated":
+            displayed_jobs = evaluated_jobs
+        else:
+            displayed_jobs = discovered_jobs
+
+        status_badge_map = {
+            "new": "🆕 New",
+            "seen": "👁️ Seen",
+            "evaluated": "✅ Evaluated"
+        }
+
+        TABLE_COLUMNS = ["Status", "Title", "Company", "Signals", "Location", "Posted", "URL"]
+        table_rows = []
+        for idx, j in enumerate(displayed_jobs):
+            st_badge = status_badge_map.get(j.get("status"), "🆕 New")
+            risk = db.check_repost_risk(j.get("company", ""), j.get("title", ""), j.get("url", ""))
+            if risk and risk.get("is_ghost_risk"):
+                signals = risk.get("badge_text", "👻 Relisted")
+            elif risk:
+                signals = risk.get("badge_text", "🔄 Relisted")
             else:
-                st.subheader("⚡ Quick Navigation & Extension Fallback")
-                st.write("Browse results from previous searches, or use the **LinkedIn Inbox** if you prefer sending jobs directly from LinkedIn.")
-        with col_btn:
-            if st.button("Open Search Results", type="primary" if discovered_jobs else "secondary", width="stretch", key="btn_goto_results_banner"):
-                st.switch_page("pages/7_scraper_results.py")
-            if st.button("🔗 LinkedIn Inbox", width="stretch", key="btn_goto_linkedin_fallback"):
-                st.switch_page("pages/5_linkedin.py")
+                signals = "✨ Fresh"
+
+            table_rows.append({
+                "Status": st_badge,
+                "Title": j.get("title", ""),
+                "Company": j.get("company", ""),
+                "Signals": signals,
+                "Location": j.get("location", ""),
+                "Posted": j.get("date", "—"),
+                "URL": j.get("url", ""),
+                "_orig_idx": idx,
+            })
+
+        preview_df = pd.DataFrame(table_rows, columns=TABLE_COLUMNS)
+        if preview_df.empty:
+            st.info("ℹ️ No job postings found matching this filter view.")
+
+        selection_event = st.dataframe(
+            preview_df[TABLE_COLUMNS],
+            width="stretch",
+            on_select="rerun",
+            selection_mode="multi-row",
+            column_config={"URL": st.column_config.LinkColumn("Posting Link")},
+            key="scraper_inpage_preview_table"
+        )
+
+        selected_indices = selection_event.selection.rows if selection_event and selection_event.selection else []
+        b_col1, b_col2, b_col3, b_col4 = st.columns([2, 2, 1.5, 1])
+
+        with b_col1:
+            unevaluated_in_view = [j for j in displayed_jobs if j.get("status") != "evaluated"]
+            all_unevaluated = [j for j in discovered_jobs if j.get("status") != "evaluated"]
+
+            if new_jobs:
+                candidate_jobs = new_jobs
+                btn_batch = min(len(candidate_jobs), max_jobs)
+                top_btn_label = f"🚀 Review Top {btn_batch} New Job{'s' if btn_batch != 1 else ''}"
+            elif unevaluated_in_view:
+                candidate_jobs = unevaluated_in_view
+                btn_batch = min(len(candidate_jobs), max_jobs)
+                top_btn_label = f"🚀 Review Top {btn_batch} Postings"
+            elif all_unevaluated:
+                candidate_jobs = all_unevaluated
+                btn_batch = min(len(candidate_jobs), max_jobs)
+                top_btn_label = f"🚀 Review Top {btn_batch} Postings"
+            else:
+                candidate_jobs = []
+                btn_batch = 0
+                top_btn_label = f"✅ All {len(discovered_jobs)} Jobs Evaluated"
+
+            if st.button(
+                top_btn_label,
+                type="primary",
+                disabled=(btn_batch == 0),
+                width="stretch",
+                key="btn_inpage_eval_top"
+            ):
+                process_evaluations(candidate_jobs[:max_jobs])
+
+        with b_col2:
+            sel_count = len(selected_indices)
+            if st.button(
+                f"🎯 Review Selected ({sel_count})",
+                disabled=(sel_count == 0),
+                width="stretch",
+                key="btn_inpage_eval_selected"
+            ):
+                chosen_raw = [displayed_jobs[i] for i in selected_indices if 0 <= i < len(displayed_jobs)]
+                chosen_unevaluated = [j for j in chosen_raw if j.get("status") != "evaluated"]
+                skipped_eval = len(chosen_raw) - len(chosen_unevaluated)
+                if skipped_eval > 0:
+                    st.info(f"⏭️ Skipped {skipped_eval} already evaluated posting(s).")
+                if not chosen_unevaluated:
+                    st.warning("All selected postings have already been evaluated.")
+                else:
+                    process_evaluations(chosen_unevaluated)
+
+        with b_col3:
+            mark_btn_label = f"👁️ Mark Seen ({len(selected_indices)})" if selected_indices else "👁️ Mark Seen"
+            can_mark = len(selected_indices) > 0 or len(new_jobs) > 0
+            if st.button(
+                mark_btn_label,
+                width="stretch",
+                disabled=not can_mark,
+                key="btn_inpage_mark_seen",
+                help="Marks postings as seen so future scrapes skip them."
+            ):
+                target_to_mark = [displayed_jobs[i] for i in selected_indices if 0 <= i < len(displayed_jobs)] if selected_indices else new_jobs
+                if db.record_seen_postings(target_to_mark):
+                    for j in target_to_mark:
+                        if j.get("status") != "evaluated":
+                            j["status"] = "seen"
+                    db.save_scraper_results(discovered_jobs, st.session_state.get("native_search_source_label", ""))
+                    st.toast(f"✅ Marked {len(target_to_mark)} posting(s) as seen.")
+                    st.rerun()
+                else:
+                    st.error("⚠️ Could not save seen postings right now (database busy). Please try again.")
+
+        with b_col4:
+            if st.button("🗑️ Clear", width="stretch", key="btn_inpage_clear_results"):
+                db.clear_scraper_results()
+                st.session_state["scraper_results_cleared"] = True
+                st.session_state["native_search_results"] = []
+                st.rerun()
+
+    else:
+        with st.container(border=True):
+            col_info, col_btn = st.columns([3, 1.4])
+            with col_info:
+                st.subheader("⚡ Extension Inbox")
+                st.write("Prefer browsing LinkedIn directly? Use the Skippy browser extension to capture jobs into your **Extension Inbox** with a single click.")
+            with col_btn:
+                if st.button("🔗 Open Extension Inbox", type="primary", width="stretch", key="btn_goto_linkedin_fallback"):
+                    st.switch_page("pages/5_linkedin.py")
 
 elif selected_mode == "📝 Paste Job Text":
     st.subheader("📝 Paste Job Text")
@@ -471,20 +641,13 @@ elif selected_mode == "🌐 Paste Multiple Links":
     st.subheader("🌐 Paste Multiple Links")
     st.caption("Paste individual job web links (one per line). Supports **Built In**, **LinkedIn (`linkedin.com/jobs/view/...`)**, and company career pages.")
     
-    col_samp, _ = st.columns([3, 7])
-    with col_samp:
-        if st.button("📋 Load Sample BuiltIn URLs", key="btn_sample_urls"):
-            st.session_state["batch_urls_input"] = (
-                "https://builtin.com/job/operations/operations-manager/224560\n"
-                "https://builtin.com/job/healthtech/clinical-specialist/224561\n"
-                "https://builtin.com/job/developer/software-engineer/224562\n"
-                "https://builtin.com/job/cyber-security/information-security-analyst/224563"
-            )
-            st.rerun()
-
-    sample_val = st.session_state.get("batch_urls_input", "")
     with st.form("batch_url_form"):
-        urls_input = st.text_area("Job URLs (one per line):", value=sample_val, height=150)
+        urls_input = st.text_area(
+            "Job URLs (one per line):",
+            value="",
+            height=150,
+            placeholder="https://builtin.com/job/...\nhttps://www.linkedin.com/jobs/view/...\nhttps://boards.greenhouse.io/..."
+        )
         submitted = st.form_submit_button("Review All Job Links", type="primary")
         
     if submitted:

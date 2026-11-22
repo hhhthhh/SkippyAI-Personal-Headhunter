@@ -13,16 +13,20 @@ from utils import (
     set_active_prompt_mode,
     save_custom_user_prompt,
     PROMPT_MODE_CUSTOM,
-    PROMPT_MODE_COMPASS,
 )
-from evaluator import render_ats_resume_html, generate_ats_resume_docx, generate_ats_resume_pdf, lint_ats_resume
+from evaluator import (
+    render_ats_resume_html,
+    generate_ats_resume_docx,
+    lint_ats_resume,
+    ai_polish_resume_content,
+)
 
 from database import atomic_write_json
 
 # 1. Guarantee state is initialized even if accessed directly via legacy routing
 initialize_core_state()
 
-st.subheader("📂 Resume Library & Editor")
+st.subheader("📄 Resume Library & ATS Editor")
 st.caption(
     "Upload as many specialized resumes as you want (`.docx`, `.pdf`, `.md`, `.txt`) or create and edit them below. "
     "When you score jobs or create tailored applications, you can choose which resumes Skippy should pull details from."
@@ -199,7 +203,7 @@ with rc3:
     safe_rname = re.sub(r"[^\w\-_\.]", "_", selected_resume_name.replace(" ", "_"))
     st.download_button(
         "📥 Download ATS (.docx)",
-        data=generate_ats_resume_docx(current_vault_text, template_style="classic"),
+        data=lambda: generate_ats_resume_docx(current_vault_text, template_style="classic"),
         file_name=f"ATS_{safe_rname}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         width="stretch",
@@ -218,6 +222,34 @@ with st.expander("🛡️ Check Resume Formatting & Scanner Compatibility", expa
     with col_l3:
         st.caption(f"**Metrics:** {lint_res['total_words']} words · {lint_res['bullet_count']} bullets ({lint_res['metric_bullet_count']} quantified)")
 
+    def _run_ai_polish():
+        api_key = st.session_state.get("user_api_key")
+        model_choice = st.session_state.get("model_choice", "Google Gemini")
+        if not api_key and "Local" not in str(model_choice):
+            st.warning("⚠️ Please provide an API key in the sidebar or Settings to use AI Content Polish.")
+            return
+        with st.spinner("AI is analyzing bullet structures and polishing content (~5-10s)..."):
+            try:
+                polished_md = ai_polish_resume_content(
+                    current_vault_text,
+                    model_choice=model_choice,
+                    api_key=api_key,
+                    local_base_url=st.session_state.get("local_base_url"),
+                    local_model_name=st.session_state.get("local_model_name"),
+                    model_override=st.session_state.get("model_override", ""),
+                )
+                resumes_vault[selected_resume_name] = polished_md
+                save_resumes(resumes_vault)
+                st.session_state["resumes_vault"] = resumes_vault
+                st.session_state["pending_resume_editor_text"] = polished_md
+                st.session_state.resume_text = combine_selected_resumes(
+                    st.session_state.get("selected_resumes", [selected_resume_name]), resumes_vault
+                )
+                st.toast("🎉 AI Content Polish complete! Bullets refined and action verbs strengthened.", icon="✨")
+                st.rerun()
+            except Exception as e:
+                st.error(f"AI Content Polish failed: {e}")
+
     if lint_res["issues"]:
         for iss in lint_res["issues"]:
             sev = iss.get("severity", "info")
@@ -228,177 +260,206 @@ with st.expander("🛡️ Check Resume Formatting & Scanner Compatibility", expa
             else:
                 st.info(f"ℹ️ **{iss['rule']}**: {iss['message']}")
 
-        if st.button("✨ Auto-Fix Formatting Issues (Clean Up Dashes, Bullets & Dates)", key=f"btn_autofix_{safe_rname}", width="stretch"):
-            resumes_vault[selected_resume_name] = lint_res["clean_markdown"]
-            save_resumes(resumes_vault)
-            st.session_state["resumes_vault"] = resumes_vault
-            st.session_state["pending_resume_editor_text"] = lint_res["clean_markdown"]
-            st.toast("✅ Formatting cleaned up (standard hyphens, clean bullets, and standardized dates).")
-            st.rerun()
+        btn_c1, btn_c2 = st.columns(2)
+        with btn_c1:
+            clean_proj_score = lint_res.get("clean_score", lint_res["score"])
+            fix_label = f"✨ Smart Auto-Fix Formatting ➔ {clean_proj_score}/100"
+            if st.button(
+                fix_label,
+                type="primary",
+                key=f"btn_autofix_{safe_rname}",
+                width="stretch",
+                help="Instant, deterministic fix (0 API calls): Promotes section headers to ##, anchors contact bar in lines 1-3, unifies bullet styles to '-', and standardizes dates.",
+            ):
+                resumes_vault[selected_resume_name] = lint_res["clean_markdown"]
+                save_resumes(resumes_vault)
+                st.session_state["resumes_vault"] = resumes_vault
+                st.session_state["pending_resume_editor_text"] = lint_res["clean_markdown"]
+                st.session_state.resume_text = combine_selected_resumes(
+                    st.session_state.get("selected_resumes", [selected_resume_name]), resumes_vault
+                )
+                st.toast(f"✅ Applied Smart Formatting! ATS Score improved to {clean_proj_score}/100.", icon="✨")
+                st.rerun()
+
+        with btn_c2:
+            if st.button(
+                "🧠 AI Content Polish (Action Verbs & Bullets)",
+                key=f"btn_ai_polish_{safe_rname}",
+                width="stretch",
+                help="Opt-in AI pass: Splits bullets >40 words, strengthens action verbs, and inserts [metric placeholders] without hallucinating background.",
+            ):
+                _run_ai_polish()
     else:
         st.success("🎉 Zero formatting issues detected! This resume is clean and easy for job scanners to read.")
+        if st.button(
+            "🧠 AI Content Polish (Strengthen Action Verbs & Metrics)",
+            key=f"btn_ai_polish_clean_{safe_rname}",
+            width="stretch",
+            help="Opt-in AI pass: Splits long bullets, sharpens active verbs, and adds metric placeholders.",
+        ):
+            _run_ai_polish()
 
 st.markdown("---")
-st.subheader("⚙️ AI Instructions & Presets")
+with st.expander("⚙️ Advanced AI Prompt Instructions & Presets", expanded=False):
+    st.caption("Customize evaluation guidelines, scoring rubrics, and instructions used by Skippy's AI evaluator.")
+    active_details = get_active_prompt_details()
+    if active_details["mode"] == PROMPT_MODE_CUSTOM:
+        st.success("🟢 **Active in Job Review:** Evaluations currently use your **Custom Instructions**.", icon="✅")
+    else:
+        col_stat, col_btn = st.columns([3.5, 1.5])
+        with col_stat:
+            st.info(
+                f"🧭 **Evaluator is currently using your Career Profile:** `{active_details['title']}`.\n\n"
+                "Edits below are saved to your Custom Instruction presets. To apply custom guidelines to the evaluator, click **Activate Custom Instructions**.",
+                icon="ℹ️"
+            )
+        with col_btn:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Activate Custom Instructions", type="primary", key="btn_activate_custom_prompt_top", width="stretch"):
+                set_active_prompt_mode(PROMPT_MODE_CUSTOM)
+                st.toast("🎯 Switched evaluation instructions to Custom Guidelines!", icon="✅")
+                st.rerun()
 
-active_details = get_active_prompt_details()
-if active_details["mode"] == PROMPT_MODE_CUSTOM:
-    st.success("🟢 **Active in Job Review:** Evaluations currently use your **Custom Instructions**.", icon="✅")
-else:
-    col_stat, col_btn = st.columns([3.5, 1.5])
-    with col_stat:
-        st.info(
-            f"🧭 **Evaluator is currently using your Career Profile:** `{active_details['title']}`.\n\n"
-            "Edits below are saved to your Custom Instruction presets. To apply custom guidelines to the evaluator, click **Activate Custom Instructions**.",
-            icon="ℹ️"
+    if "preset_feedback" in st.session_state:
+        fb_type, fb_msg = st.session_state.pop("preset_feedback")
+        if fb_type == "success":
+            st.success(fb_msg)
+        elif fb_type == "info":
+            st.info(fb_msg)
+        elif fb_type == "warning":
+            st.warning(fb_msg)
+        elif fb_type == "error":
+            st.error(fb_msg)
+
+    DEFAULT_PRESETS = {
+        "Default Boilerplate": (
+            "You are an advanced automated job-matching engine and career risk analyst evaluating a candidate's master resume against a job description.\n\n"
+            "EVALUATION INSTRUCTIONS:\n"
+            "1. **Hard Stop Check:** Identify if the job demands an absolute legal or compliance requirement that is completely absent from the resume. If so, set `is_eligible` to False and `match_score` to 0.\n"
+            "2. **Skill Matching:** Do not penalize the candidate for missing verbatim keywords if their technical projects imply competence.\n"
+            "3. **Red Flag & Caveat Analysis:** Actively scan the job description for potential drawbacks, ambiguous expectations, heavy on-call demands, or red flags.\n"
+            "4. **Resume Recommendations:** Advise the applicant which words to include in their resume based off experience.\n"
+            "5. **Advisement:** Advise the applicant if they should apply for the position or not.\n"
+            "6. **Relevant skill check:** List some relevant skills that align with the user's technical experience and projects in the summary if they are eligible for the position and advised to apply."
+        ),
+        "Strict Keyword Matcher": (
+            "You are an ATS (Applicant Tracking System) screening algorithm.\n\n"
+            "EVALUATION INSTRUCTIONS:\n"
+            "1. Score the resume strictly on exact keyword matches found in the job description.\n"
+            "2. Generate a comprehensive list in the `missing_skills` array for any technical term, framework, or tool mentioned in the job description that does not explicitly appear in the resume."
+        ),
+        "Red Flag Detector": (
+            "You are a career risk analyst evaluating a candidate's master resume against a job description.\n\n"
+            "EVALUATION INSTRUCTIONS:\n"
+            "1. Scan the job description for potential drawbacks, ambiguous expectations, heavy on-call demands, or red flags.\n"
+            "2. Generate a comprehensive list in the `red_flags` array for any concerning aspects of the job description that may negatively impact the candidate's career or work-life balance."
         )
-    with col_btn:
+    }
+
+    def load_prompt_presets() -> dict:
+        for path in ("prompt_presets.json", "prompt_presets.template.json"):
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        if isinstance(data, dict) and data:
+                            return data
+                except Exception:
+                    pass
+        return dict(DEFAULT_PRESETS)
+
+    def save_prompt_presets(presets_data: dict):
+        atomic_write_json("prompt_presets.json", presets_data, indent=4)
+
+    presets = load_prompt_presets()
+    if not presets:
+        presets = dict(DEFAULT_PRESETS)
+    preset_names = list(presets.keys())
+
+    # Apply pending widget updates before widgets are instantiated
+    if "pending_preset_selector" in st.session_state:
+        st.session_state["preset_selector"] = st.session_state.pop("pending_preset_selector")
+
+    if "pending_prompt_text" in st.session_state:
+        st.session_state["prompt_editor_text"] = st.session_state.pop("pending_prompt_text")
+
+    if "pending_new_preset_name" in st.session_state:
+        st.session_state["new_preset_name_input"] = st.session_state.pop("pending_new_preset_name")
+
+    # Ensure default preset exists in state
+    if "preset_selector" not in st.session_state or st.session_state.preset_selector not in presets:
+        st.session_state.preset_selector = preset_names[0]
+
+    # Ensure text area session state is synchronized
+    if "prompt_editor_text" not in st.session_state:
+        st.session_state.prompt_editor_text = presets.get(st.session_state.preset_selector, "")
+
+    def on_preset_change():
+        """Triggered instantly upon dropdown selection before the page renders downstream widgets."""
+        chosen = st.session_state.preset_selector
+        if chosen in presets:
+            st.session_state.prompt_editor_text = presets[chosen]
+
+    # --- PRESET SELECTOR & DELETE BUTTON ---
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        selected_preset = st.selectbox(
+            "Load Preset",
+            preset_names,
+            key="preset_selector",
+            on_change=on_preset_change
+        )
+    with col2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Activate Custom Instructions", type="primary", key="btn_activate_custom_prompt_top", width="stretch"):
+        if st.button("🗑️ Delete Selected"):
+            if len(presets) > 1:
+                del presets[selected_preset]
+                save_prompt_presets(presets)
+                # Fall back to the first available preset
+                remaining_keys = list(presets.keys())
+                st.session_state["pending_preset_selector"] = remaining_keys[0]
+                st.session_state["pending_prompt_text"] = presets[remaining_keys[0]]
+                st.session_state["preset_feedback"] = ("info", f"Deleted preset '{selected_preset}'.")
+                st.rerun()
+            else:
+                st.error("You cannot delete the last remaining preset.")
+
+    # --- INSTRUCTIONS EDITOR ---
+    prompt_text = st.text_area("Instructions Editor", key="prompt_editor_text", height=300)
+
+    st.markdown("**Save Options**")
+    new_preset_name = st.text_input("Name for New Preset (Only used when creating a new one):", key="new_preset_name_input")
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        if st.button("➕ Create New Preset", width="stretch"):
+            clean_name = new_preset_name.strip()
+            if not clean_name:
+                st.warning("Please enter a name for the new preset.")
+            elif len(clean_name) > 80:
+                st.warning("Preset name is too long (maximum 80 characters).")
+            elif re.search(r'[\x00-\x1f]', clean_name):
+                st.warning("Preset name contains invalid characters.")
+            else:
+                presets[clean_name] = prompt_text
+                save_prompt_presets(presets)
+                st.session_state["pending_preset_selector"] = clean_name
+                st.session_state["pending_prompt_text"] = prompt_text
+                st.session_state["pending_new_preset_name"] = ""
+                st.session_state["preset_feedback"] = ("success", f"Created new preset: '{clean_name}'")
+                st.rerun()
+
+    with c2:
+        if st.button("💾 Update Current Preset", width="stretch"):
+            presets[selected_preset] = prompt_text
+            save_prompt_presets(presets)
+            st.success(f"'{selected_preset}' updated successfully!")
+
+    with c3:
+        if st.button("✅ Set as Active Custom Prompt", type="primary", width="stretch"):
+            save_custom_user_prompt(prompt_text)
             set_active_prompt_mode(PROMPT_MODE_CUSTOM)
-            st.toast("🎯 Switched evaluation instructions to Custom Guidelines!", icon="✅")
+            st.session_state.system_instructions = prompt_text
+            st.success("Active prompt updated! The evaluator will now use these custom instructions.")
             st.rerun()
-
-if "preset_feedback" in st.session_state:
-    fb_type, fb_msg = st.session_state.pop("preset_feedback")
-    if fb_type == "success":
-        st.success(fb_msg)
-    elif fb_type == "info":
-        st.info(fb_msg)
-    elif fb_type == "warning":
-        st.warning(fb_msg)
-    elif fb_type == "error":
-        st.error(fb_msg)
-
-DEFAULT_PRESETS = {
-    "Default Boilerplate": (
-        "You are an advanced automated job-matching engine and career risk analyst evaluating a candidate's master resume against a job description.\n\n"
-        "EVALUATION INSTRUCTIONS:\n"
-        "1. **Hard Stop Check:** Identify if the job demands an absolute legal or compliance requirement that is completely absent from the resume. If so, set `is_eligible` to False and `match_score` to 0.\n"
-        "2. **Skill Matching:** Do not penalize the candidate for missing verbatim keywords if their technical projects imply competence.\n"
-        "3. **Red Flag & Caveat Analysis:** Actively scan the job description for potential drawbacks, ambiguous expectations, heavy on-call demands, or red flags.\n"
-        "4. **Resume Recommendations:** Advise the applicant which words to include in their resume based off experience.\n"
-        "5. **Advisement:** Advise the applicant if they should apply for the position or not.\n"
-        "6. **Relevant skill check:** List some relevant skills that align with the user's technical experience and projects in the summary if they are eligible for the position and advised to apply."
-    ),
-    "Strict Keyword Matcher": (
-        "You are an ATS (Applicant Tracking System) screening algorithm.\n\n"
-        "EVALUATION INSTRUCTIONS:\n"
-        "1. Score the resume strictly on exact keyword matches found in the job description.\n"
-        "2. Generate a comprehensive list in the `missing_skills` array for any technical term, framework, or tool mentioned in the job description that does not explicitly appear in the resume."
-    ),
-    "Red Flag Detector": (
-        "You are a career risk analyst evaluating a candidate's master resume against a job description.\n\n"
-        "EVALUATION INSTRUCTIONS:\n"
-        "1. Scan the job description for potential drawbacks, ambiguous expectations, heavy on-call demands, or red flags.\n"
-        "2. Generate a comprehensive list in the `red_flags` array for any concerning aspects of the job description that may negatively impact the candidate's career or work-life balance."
-    )
-}
-
-def load_prompt_presets() -> dict:
-    for path in ("prompt_presets.json", "prompt_presets.template.json"):
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, dict) and data:
-                        return data
-            except Exception:
-                pass
-    return dict(DEFAULT_PRESETS)
-
-def save_prompt_presets(presets_data: dict):
-    atomic_write_json("prompt_presets.json", presets_data, indent=4)
-
-presets = load_prompt_presets()
-if not presets:
-    presets = dict(DEFAULT_PRESETS)
-preset_names = list(presets.keys())
-
-# Apply pending widget updates before widgets are instantiated
-if "pending_preset_selector" in st.session_state:
-    st.session_state["preset_selector"] = st.session_state.pop("pending_preset_selector")
-
-if "pending_prompt_text" in st.session_state:
-    st.session_state["prompt_editor_text"] = st.session_state.pop("pending_prompt_text")
-
-if "pending_new_preset_name" in st.session_state:
-    st.session_state["new_preset_name_input"] = st.session_state.pop("pending_new_preset_name")
-
-# Ensure default preset exists in state
-if "preset_selector" not in st.session_state or st.session_state.preset_selector not in presets:
-    st.session_state.preset_selector = preset_names[0]
-
-# Ensure text area session state is synchronized
-if "prompt_editor_text" not in st.session_state:
-    st.session_state.prompt_editor_text = presets.get(st.session_state.preset_selector, "")
-
-def on_preset_change():
-    """Triggered instantly upon dropdown selection before the page renders downstream widgets."""
-    chosen = st.session_state.preset_selector
-    if chosen in presets:
-        st.session_state.prompt_editor_text = presets[chosen]
-
-# --- PRESET SELECTOR & DELETE BUTTON ---
-col1, col2 = st.columns([4, 1])
-with col1:
-    selected_preset = st.selectbox(
-        "Load Preset",
-        preset_names,
-        key="preset_selector",
-        on_change=on_preset_change
-    )
-with col2:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🗑️ Delete Selected"):
-        if len(presets) > 1:
-            del presets[selected_preset]
-            save_prompt_presets(presets)
-            # Fall back to the first available preset
-            remaining_keys = list(presets.keys())
-            st.session_state["pending_preset_selector"] = remaining_keys[0]
-            st.session_state["pending_prompt_text"] = presets[remaining_keys[0]]
-            st.session_state["preset_feedback"] = ("info", f"Deleted preset '{selected_preset}'.")
-            st.rerun()
-        else:
-            st.error("You cannot delete the last remaining preset.")
-
-# --- INSTRUCTIONS EDITOR ---
-prompt_text = st.text_area("Instructions Editor", key="prompt_editor_text", height=300)
-
-st.markdown("**Save Options**")
-new_preset_name = st.text_input("Name for New Preset (Only used when creating a new one):", key="new_preset_name_input")
-
-c1, c2, c3 = st.columns(3)
-
-with c1:
-    if st.button("➕ Create New Preset", width="stretch"):
-        clean_name = new_preset_name.strip()
-        if not clean_name:
-            st.warning("Please enter a name for the new preset.")
-        elif len(clean_name) > 80:
-            st.warning("Preset name is too long (maximum 80 characters).")
-        elif re.search(r'[\x00-\x1f]', clean_name):
-            st.warning("Preset name contains invalid characters.")
-        else:
-            presets[clean_name] = prompt_text
-            save_prompt_presets(presets)
-            st.session_state["pending_preset_selector"] = clean_name
-            st.session_state["pending_prompt_text"] = prompt_text
-            st.session_state["pending_new_preset_name"] = ""
-            st.session_state["preset_feedback"] = ("success", f"Created new preset: '{clean_name}'")
-            st.rerun()
-
-with c2:
-    if st.button("💾 Update Current Preset", width="stretch"):
-        presets[selected_preset] = prompt_text
-        save_prompt_presets(presets)
-        st.success(f"'{selected_preset}' updated successfully!")
-
-with c3:
-    if st.button("✅ Set as Active Custom Prompt", type="primary", width="stretch"):
-        save_custom_user_prompt(prompt_text)
-        set_active_prompt_mode(PROMPT_MODE_CUSTOM)
-        st.session_state.system_instructions = prompt_text
-        st.success("Active prompt updated! The evaluator will now use these custom instructions.")
-        st.rerun()

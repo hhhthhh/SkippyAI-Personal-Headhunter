@@ -3,8 +3,13 @@ os.environ.setdefault("LITELLM_DISABLE_REDACT_SECRETS", "true")
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 import streamlit as st
-from auth import is_authenticated, render_login_page
-from utils import setup_sidebar, enforce_onboarding, inject_interactive_hover_halo_effects
+from auth import is_authenticated, render_login_page, sync_session_cookie
+from utils import (
+    setup_sidebar,
+    enforce_onboarding,
+    inject_interactive_hover_halo_effects,
+    render_global_top_pipeline_banner,
+)
 from webhook import start_background_listener
 
 # 1. Global Page Configuration (Must be the very first Streamlit command)
@@ -32,12 +37,11 @@ def get_extension_inbox_title() -> str:
 pages = [
     st.Page("pages/1_scraper.py", title="Job Search", icon="🔍"),
     st.Page("pages/5_linkedin.py", title=get_extension_inbox_title(), icon="🔗"),
-    st.Page("pages/7_scraper_results.py", title="Search Results", icon="📋"),
-    st.Page("pages/2_history.py", title="Job History", icon="📁"),
+    st.Page("pages/2_history.py", title="Evaluations", icon="📁"),
     st.Page("pages/6_gallery.py", title="Saved Documents", icon="🖼️"),
     st.Page("pages/8_pipeline_funnel.py", title="Application Tracker", icon="🌊"),
     st.Page("pages/3_metrics.py", title="Skills & Insights", icon="📊"),
-    st.Page("pages/4_editors.py", title="Resumes & AI Settings", icon="⚙️"),
+    st.Page("pages/4_editors.py", title="Resume Library", icon="📄"),
     st.Page("pages/9_career_compass.py", title="Career Profile", icon="🧭"),
     st.Page("pages/0_about.py", title="About Skippy", icon="👋")
 ]
@@ -50,6 +54,8 @@ if not authenticated:
     render_login_page()
     st.stop()
 
+sync_session_cookie()
+
 # 4. Spin up the background webhook listener for the browser extension
 @st.cache_resource
 def init_webhook():
@@ -61,5 +67,8 @@ init_webhook()
 # 5. Global Sidebar & Security
 setup_sidebar()
 enforce_onboarding()
+
+# 6. Global Top Banner for Pipeline Execution / Completion
+render_global_top_pipeline_banner()
 
 pg.run()

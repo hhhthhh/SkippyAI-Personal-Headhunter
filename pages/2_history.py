@@ -2,15 +2,13 @@ import streamlit as st
 import pandas as pd
 import os
 import re
-import time
 import sys
 import hashlib
 from datetime import date, datetime, timedelta
-from collections import defaultdict
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from utils import load_resumes, combine_selected_resumes
+from utils import load_resumes, combine_selected_resumes, render_ats_resume_downloads
 import database as db
 from evaluator import (
     tailor_resume,
@@ -21,8 +19,6 @@ from evaluator import (
     generate_outreach_messages,
     generate_deep_company_brief,
     generate_docx_from_markdown,
-    generate_ats_resume_docx,
-    generate_ats_resume_pdf,
     is_pdf_conversion_available,
     render_ats_resume_html,
     review_and_refine_document,
@@ -30,7 +26,7 @@ from evaluator import (
     get_fit_band,
 )
 
-st.title("🗂️ Job History")
+st.title("📁 Evaluations")
 
 def safe_fragment_rerun():
     """Reruns only the local fragment if inside a fragment interaction; falls back to app rerun."""
@@ -46,9 +42,9 @@ if "latest_batch_info" in st.session_state:
     count = len(urls)
     if "active_job_url" not in st.session_state and urls:
         st.session_state["active_job_url"] = urls[0]
-    col_msg, col_dism = st.columns([5.5, 1])
+    col_msg, col_dism = st.columns([5.5, 1], vertical_alignment="center")
     with col_msg:
-        st.info(f"✨ **Latest Run Results:** Viewing {count} newly evaluated posting{'s' if count != 1 else ''} from **{src}**. Review summary in the Overview Table and detailed cards below.", icon="🎯")
+        st.info(f"✨ **Latest Run Results:** Viewing {count} newly evaluated posting{'s' if count != 1 else ''} from **{src}**.", icon="🎯")
     with col_dism:
         if st.button("Dismiss", key="dismiss_latest_batch_info"):
             del st.session_state["latest_batch_info"]
@@ -68,8 +64,8 @@ all_saved_jobs = db.load_all_jobs(summary_only=True)
 if "resumes_vault" not in st.session_state:
     st.session_state["resumes_vault"] = load_resumes()
 
-# Data Management tools tucked neatly at the top
-col_act1, col_act2, col_act3, _ = st.columns([1.5, 2.1, 1.8, 4.6])
+# Header Toolbar with Summary Metrics & Quick Action Tools
+col_act1, col_act2, col_act3, _ = st.columns([1.5, 2.2, 1.8, 4.5])
 with col_act1:
     if st.button("🔄 Refresh Data", type="secondary", width="stretch"):
         st.rerun()
@@ -159,6 +155,7 @@ with col_act2:
             _clear_deleted_job_state(target_urls)
             st.toast(f"🧹 Removed {removed} posting(s) (kept marked as Seen).")
             st.rerun()
+
 with col_act3:
     with st.popover("🗑️ Clear History", width="stretch"):
         st.warning("⚠️ **Warning:** This will permanently delete all evaluated postings, generated documents, and audit reports.")
@@ -205,39 +202,17 @@ def parse_job_date(timestamp_str: str) -> date | None:
     return dt.date() if dt else None
 
 
-def format_day_group_label(job_date: date | None, today: date) -> str:
-    """Formats an expandable group header label with relative and absolute calendar information."""
-    if job_date is None:
-        return "📅 Earlier / Undated Evaluations"
-    date_short = f"{job_date.month}/{job_date.day}/{str(job_date.year)[-2:]}"
-    date_long = job_date.strftime("%A, %b ") + str(job_date.day) + job_date.strftime(", %Y")
-    delta = (today - job_date).days
-    if delta == 0:
-        return f"📅 Today ({date_short}) — {date_long}"
-    elif delta == 1:
-        return f"📅 Yesterday ({date_short}) — {date_long}"
-    elif 1 < delta <= 7:
-        return f"📅 {date_long} ({date_short} · {delta} days ago)"
-    else:
-        return f"📅 {date_long} ({date_short})"
+def get_source(item: dict) -> str:
+    """Safely extracts the job acquisition channel (Scraper, LinkedIn, or Manual)."""
+    src = item.get("Source")
+    if pd.isna(src) or not src:
+        return "Manual"
+    return str(src).strip()
 
 
-# --- TOP-LEVEL DATAFRAME & FILTERS ---
+# Build search dataframe
 today = date.today()
-fcol1, fcol2, metric_col, _ = st.columns([2.5, 2.5, 2, 3])
-with fcol1:
-    filter_selection = st.selectbox(
-        "Filter by Assessment:",
-        ["All", "Strong Fit (75+)", "Good Fit (60-74)", "Moderate / Weak Fit (<60)", "Disqualified"]
-    )
-with fcol2:
-    date_filter_selection = st.selectbox(
-        "Filter by Evaluation Date:",
-        ["All Dates", "Today", "Yesterday", "Past 7 Days", "Past 30 Days"]
-    )
-
 df = pd.DataFrame(all_saved_jobs)
-# Store the original list index so we can tie dataframe clicks back to the right card
 df["Original_Index"] = df.index
 if "Company" not in df.columns:
     df["Company"] = ""
@@ -245,15 +220,35 @@ if "Deadline" not in df.columns:
     df["Deadline"] = ""
 if "Timestamp" not in df.columns:
     df["Timestamp"] = ""
+if "Position" not in df.columns:
+    df["Position"] = "Role"
+if "Source" not in df.columns:
+    df["Source"] = "Manual"
+if "Technical Score" not in df.columns:
+    df["Technical Score"] = 0
+if "Experience Score" not in df.columns:
+    df["Experience Score"] = 0
+if "Behavioral Score" not in df.columns:
+    df["Behavioral Score"] = 0
+if "Career Score" not in df.columns:
+    df["Career Score"] = 0
+if "Matching Skills" not in df.columns:
+    df["Matching Skills"] = ""
+if "Missing Skills" not in df.columns:
+    df["Missing Skills"] = ""
+if "Red Flags" not in df.columns:
+    df["Red Flags"] = ""
 
 df["Job_Date"] = df["Timestamp"].apply(parse_job_date)
 df["Company_Display"] = df["Company"].apply(lambda c: c if str(c).strip() and str(c).strip() != "Unknown Company" else "—")
 df["Deadline_Display"] = df["Deadline"].apply(format_deadline_badge)
-
-
-def get_assessment(row):
-    return get_fit_band(row.get("Score", 0), bool(row.get("Eligible", True)))
-
+df["Assessment"] = df.apply(lambda row: get_fit_band(row.get("Score", 0), bool(row.get("Eligible", True))), axis=1)
+df["Clean_Source"] = df.apply(get_source, axis=1)
+df["Score"] = pd.to_numeric(df["Score"], errors="coerce").fillna(0).astype(int)
+df["Technical Score"] = pd.to_numeric(df["Technical Score"], errors="coerce").fillna(0).astype(int)
+df["Experience Score"] = pd.to_numeric(df["Experience Score"], errors="coerce").fillna(0).astype(int)
+df["Behavioral Score"] = pd.to_numeric(df["Behavioral Score"], errors="coerce").fillna(0).astype(int)
+df["Career Score"] = pd.to_numeric(df["Career Score"], errors="coerce").fillna(0).astype(int)
 
 def get_signals_badge(row):
     risk = db.check_repost_risk(row.get("Company", ""), row.get("Position", ""), row.get("URL", ""))
@@ -263,77 +258,111 @@ def get_signals_badge(row):
         return risk.get("badge_text", "🔄 Relisted")
     return "✨ Fresh"
 
-
-df["Assessment"] = df.apply(get_assessment, axis=1)
 df["Signals"] = df.apply(get_signals_badge, axis=1)
+df["_is_archived"] = df["Application Status"].fillna("").astype(str).str.strip().str.lower().str.contains("archive")
+active_total_count = int((~df["_is_archived"]).sum())
+archived_total_count = int(df["_is_archived"].sum())
 
-if filter_selection == "Strong Fit (75+)":
-    df = df[df["Assessment"] == "✅ Strong Fit"]
-elif filter_selection == "Good Fit (60-74)":
-    df = df[df["Assessment"] == "🟢 Good Fit"]
-elif filter_selection == "Moderate / Weak Fit (<60)":
-    df = df[df["Assessment"].isin(["⚖️ Moderate Fit", "⚠️ Weak Fit", "🚫 Poor Fit"])]
-elif filter_selection == "Disqualified":
-    df = df[df["Assessment"] == "❌ Disqualified"]
+# If jumping to a specific posting from another page, switch to the view containing that posting
+if st.session_state.get("jump_to_card") and st.session_state.get("active_job_url"):
+    _jump_target = next((j for j in all_saved_jobs if j.get("URL") == st.session_state.get("active_job_url")), None)
+    if _jump_target is not None:
+        _jump_is_archived = "archive" in str(_jump_target.get("Application Status") or "").strip().lower()
+        st.session_state["history_archive_view"] = "archived" if _jump_is_archived else "active"
 
-if date_filter_selection == "Today":
-    df = df[df["Job_Date"] == today]
-elif date_filter_selection == "Yesterday":
-    df = df[df["Job_Date"] == (today - timedelta(days=1))]
-elif date_filter_selection == "Past 7 Days":
-    df = df[df["Job_Date"].apply(lambda d: d is not None and 0 <= (today - d).days <= 7)]
-elif date_filter_selection == "Past 30 Days":
-    df = df[df["Job_Date"].apply(lambda d: d is not None and 0 <= (today - d).days <= 30)]
-
-with metric_col:
-    if len(df) != len(all_saved_jobs):
-        st.metric("Postings Shown", len(df), delta=f"{len(df) - len(all_saved_jobs)} filtered")
-    else:
-        st.metric("Total Postings Saved", len(all_saved_jobs))
-
-
-def highlight_status(row):
-    status = row.get("Application Status", "Not Applied")
-    colors = {
-        "Applied": "rgba(30,136,229,0.2)",
-        "Interviewing": "rgba(142,68,173,0.2)",
-        "Waitlisted": "rgba(245,124,0,0.2)",
-        "Rejected": "rgba(229,57,53,0.2)",
-        "Rejected (Application)": "rgba(229,57,53,0.2)",
-        "Rejected (Interview)": "rgba(183,28,28,0.25)",
-        "Ghosted / Stale": "rgba(158,158,158,0.2)",
-        "Archived": "rgba(117,117,117,0.2)",
-        "Offer": "rgba(67,160,71,0.25)",
-    }
-    return [f"background-color: {colors.get(status, '')}"] * len(row)
-
-
-display_cols = ["Timestamp", "Position", "Company_Display", "Assessment", "Score", "Signals", "Deadline_Display", "Application Status", "URL", "Red Flags"]
-valid_cols = [c for c in display_cols if c in df.columns]
-styled_df = df[valid_cols].rename(
-    columns={"Company_Display": "Company", "Deadline_Display": "Deadline"}
-).style.apply(highlight_status, axis=1)
-
-selection_event = st.dataframe(
-    styled_df,
-    width="stretch",
-    on_select="rerun",
-    selection_mode="single-row",
-    column_config={"URL": st.column_config.LinkColumn("Source URL")},
-    key="history_overview_table"
+history_view_mode = st.radio(
+    "Posting View:",
+    options=["active", "archived"],
+    format_func=lambda k: (
+        f"📋 Active Postings ({active_total_count})"
+        if k == "active"
+        else f"🗄️ Archived ({archived_total_count})"
+    ),
+    horizontal=True,
+    key="history_archive_view",
+    label_visibility="collapsed",
 )
 
-# Identify which job the user clicked in the dataframe
-active_job_id = int(df.iloc[selection_event.selection.rows[0]]["Original_Index"]) if (selection_event.selection.rows and selection_event.selection.rows[0] < len(df)) else None
-if active_job_id != st.session_state.get("_hist_last_row"):
-    st.session_state["_hist_last_row"] = active_job_id
-    if active_job_id is not None:
-        st.session_state["_hist_jump_nonce"] = st.session_state.get("_hist_jump_nonce", 0) + 1
-if active_job_id is not None and 0 <= active_job_id < len(all_saved_jobs):
-    st.session_state["active_job_url"] = all_saved_jobs[active_job_id].get("URL")
+# --- UNIFIED SEARCH & FILTER BAR ---
+with st.container(border=True):
+    col_search, col_source, col_fit, col_date = st.columns([3.2, 1.8, 2.5, 2.0], vertical_alignment="bottom")
+    with col_search:
+        search_query = st.text_input(
+            "🔍 Search Evaluated Postings:",
+            placeholder="Type role, company, skills...",
+            key="history_search_query",
+        ).strip().lower()
+    with col_source:
+        source_filter = st.selectbox(
+            "Source Board:",
+            ["All Sources", "🕸️ Scraper", "🔗 LinkedIn", "📝 Manual"],
+            key="history_source_filter",
+        )
+    with col_fit:
+        filter_selection = st.selectbox(
+            "Fit Assessment:",
+            ["All Fit Levels", "Strong Fit (75+)", "Good Fit (60-74)", "Moderate / Weak Fit (<60)", "Disqualified"],
+            key="history_fit_filter",
+        )
+    with col_date:
+        date_filter_selection = st.selectbox(
+            "Evaluation Date:",
+            ["All Dates", "Today", "Yesterday", "Past 7 Days", "Past 30 Days"],
+            key="history_date_filter",
+        )
 
-st.markdown("---")
-st.subheader("🔍 Detailed Postings", anchor="details")
+# Apply filters
+filtered_df = df[df["_is_archived"]].copy() if history_view_mode == "archived" else df[~df["_is_archived"]].copy()
+
+if search_query:
+    filtered_df = filtered_df[
+        filtered_df["Position"].astype(str).str.lower().str.contains(search_query, regex=False) |
+        filtered_df["Company"].astype(str).str.lower().str.contains(search_query, regex=False) |
+        filtered_df["Summary"].astype(str).str.lower().str.contains(search_query, regex=False) |
+        filtered_df["Matching Skills"].astype(str).str.lower().str.contains(search_query, regex=False)
+    ]
+
+if source_filter == "🕸️ Scraper":
+    filtered_df = filtered_df[filtered_df["Clean_Source"] == "Scraper"]
+elif source_filter == "🔗 LinkedIn":
+    filtered_df = filtered_df[filtered_df["Clean_Source"] == "LinkedIn"]
+elif source_filter == "📝 Manual":
+    filtered_df = filtered_df[filtered_df["Clean_Source"] == "Manual"]
+
+if filter_selection == "Strong Fit (75+)":
+    filtered_df = filtered_df[filtered_df["Assessment"] == "✅ Strong Fit"]
+elif filter_selection == "Good Fit (60-74)":
+    filtered_df = filtered_df[filtered_df["Assessment"] == "🟢 Good Fit"]
+elif filter_selection == "Moderate / Weak Fit (<60)":
+    filtered_df = filtered_df[filtered_df["Assessment"].isin(["⚖️ Moderate Fit", "⚠️ Weak Fit", "🚫 Poor Fit"])]
+elif filter_selection == "Disqualified":
+    filtered_df = filtered_df[filtered_df["Assessment"] == "❌ Disqualified"]
+
+if date_filter_selection == "Today":
+    filtered_df = filtered_df[filtered_df["Job_Date"] == today]
+elif date_filter_selection == "Yesterday":
+    filtered_df = filtered_df[filtered_df["Job_Date"] == (today - timedelta(days=1))]
+elif date_filter_selection == "Past 7 Days":
+    filtered_df = filtered_df[filtered_df["Job_Date"].apply(lambda d: d is not None and 0 <= (today - d).days <= 7)]
+elif date_filter_selection == "Past 30 Days":
+    filtered_df = filtered_df[filtered_df["Job_Date"].apply(lambda d: d is not None and 0 <= (today - d).days <= 30)]
+
+
+# Determine Active / Selected Job within the current view
+target_url = st.session_state.get("active_job_url")
+active_job = None
+if target_url:
+    candidate_job = next((j for j in all_saved_jobs if j.get("URL") == target_url), None)
+    if candidate_job is not None:
+        cand_archived = "archive" in str(candidate_job.get("Application Status") or "").strip().lower()
+        if (history_view_mode == "archived") == cand_archived:
+            active_job = candidate_job
+
+# If no active job yet or target_url belongs to the other view, default to the top filtered job
+if active_job is None and not filtered_df.empty:
+    first_idx = int(filtered_df.iloc[0]["Original_Index"])
+    active_job = all_saved_jobs[first_idx]
+    st.session_state["active_job_url"] = active_job.get("URL")
 
 
 # --- UI Helper Functions ---
@@ -360,7 +389,7 @@ def application_status_tracker(item: dict):
         db.update_job_field(url, "Application Status", new_status)
         
     st.selectbox(
-        "Status",
+        "Application Status",
         options=statuses,
         index=statuses.index(current) if current in statuses else 0,
         key=f"status_tracker_{url}",
@@ -373,8 +402,8 @@ def application_status_tracker(item: dict):
 def document_generator(item: dict, doc_type: str, generator_func):
     url, job_text = item.get("URL"), item.get("Job Text", "")
     cache_key = f"{doc_type}_{url}"
-    audit_cache_key = f"Reviewer_Audit_{url}"
-    supports_reviewer = doc_type in ("Tailored Resume", "Cover Letter")
+    audit_cache_key = f"Reviewer_Audit_{doc_type}_{url}"
+    audit_warn_key = f"Reviewer_Audit_Warn_{doc_type}_{url}"
     
     db_content = item.get(doc_type)
     if pd.isna(db_content) or not db_content or str(db_content).lower() == "nan":
@@ -383,9 +412,10 @@ def document_generator(item: dict, doc_type: str, generator_func):
     if cache_key not in st.session_state:
         st.session_state[cache_key] = db_content
 
-    db_audit = item.get("Reviewer Audit", "")
-    if pd.isna(db_audit) or not db_audit or str(db_audit).lower() == "nan":
-        db_audit = ""
+    db_audit_raw = item.get("Reviewer Audit", "")
+    if pd.isna(db_audit_raw) or not db_audit_raw or str(db_audit_raw).lower() == "nan":
+        db_audit_raw = ""
+    db_audit = db.get_doc_audit(db_audit_raw, doc_type)
     if audit_cache_key not in st.session_state:
         st.session_state[audit_cache_key] = db_audit
         
@@ -398,29 +428,22 @@ def document_generator(item: dict, doc_type: str, generator_func):
     ] or (vault_names[:1] if vault_names else [])
 
     if not current_content:
-        use_reviewer = True
         interview_stage = "Full Loop (All Stages)"
         followup_type = "Post-Application Follow-Up (10-14+ Days Quiet)"
 
         chosen_doc_resumes = default_doc_resumes
         if len(vault_names) > 1:
-            chosen_doc_resumes = st.multiselect(
-                "📄 Resume Profile(s) to Pull Details From:",
-                options=vault_names,
-                default=default_doc_resumes,
-                key=f"doc_res_sel_{cache_key}",
-                help="Select 1 or more saved resumes. If you select multiple, Skippy pulls the best-matching roles, projects, skills, and bullet points across them into a single cohesive document.",
-            ) or default_doc_resumes
+            with st.expander("📄 Resume Profile(s) to Pull Details From", expanded=False):
+                chosen_doc_resumes = st.multiselect(
+                    "Select Resumes to Pull Achievements & Context From:",
+                    options=vault_names,
+                    default=default_doc_resumes,
+                    key=f"doc_res_sel_{cache_key}",
+                    help="Select 1 or more saved resumes. If you select multiple, Skippy pulls the best-matching roles, projects, skills, and bullet points across them into a single cohesive document.",
+                ) or default_doc_resumes
         active_resume_for_gen = combine_selected_resumes(chosen_doc_resumes, vault) if chosen_doc_resumes else st.session_state.get("resume_text", "")
 
-        if supports_reviewer:
-            use_reviewer = st.checkbox(
-                "🛡️ Run Accuracy & Fact Check (Prevents Made-Up Info & Checks Keywords)",
-                value=False,
-                key=f"chk_rev_{cache_key}",
-                help="Optional (adds ~10-15s): runs a second review pass comparing the draft against your real resume and the job description to eliminate made-up details, strip clichés, and verify key skill terms."
-            )
-        elif doc_type == "Interview Prep":
+        if doc_type == "Interview Prep":
             interview_stage = st.selectbox(
                 "🎯 Target Interview Stage:",
                 [
@@ -445,12 +468,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
             )
 
         if st.button(f"⚡ Generate {doc_type}", key=f"btn_{cache_key}", type="primary"):
-            spinner_msg = (
-                f"Step 1/2: Drafting {doc_type} → Step 2/2: Running Accuracy & Fact Check..."
-                if (supports_reviewer and use_reviewer)
-                else f"Generating {doc_type}..."
-            )
-            with st.spinner(spinner_msg):
+            with st.spinner(f"Generating {doc_type}..."):
                 try:
                     if doc_type == "Interview Prep":
                         content = generator_func(
@@ -482,233 +500,32 @@ def document_generator(item: dict, doc_type: str, generator_func):
                         content = generator_func(
                             active_resume_for_gen,
                             job_text,
-                            company_name=str(item.get("Company") or ""),
-                            position_name=str(item.get("Position") or ""),
-                            note_type=followup_type,
-                            tailored_resume=str(item.get("Tailored Resume") or ""),
-                            cover_letter=str(item.get("Cover Letter") or ""),
-                            model_choice=st.session_state.get("model_choice"),
-                            api_key=st.session_state.get("user_api_key"),
-                            local_base_url=st.session_state.get("local_base_url"),
-                            local_model_name=st.session_state.get("local_model_name"),
-                            model_override=st.session_state.get("model_override", ""),
-                            skip_guard=True,
-                        )
-                    elif doc_type == "Outreach Message":
-                        content = generator_func(
-                            master_resume=active_resume_for_gen,
-                            job_description=job_text,
-                            company_name=str(item.get("Company") or ""),
-                            position_name=str(item.get("Position") or ""),
-                            model_choice=st.session_state.get("model_choice"),
-                            api_key=st.session_state.get("user_api_key"),
-                            local_base_url=st.session_state.get("local_base_url"),
-                            local_model_name=st.session_state.get("local_model_name"),
-                            tailored_resume=str(item.get("Tailored Resume") or ""),
-                            model_override=st.session_state.get("model_override", ""),
-                            skip_guard=True,
-                        )
-                    elif doc_type == "Company Intel":
-                        content = generator_func(
-                            company_name=str(item.get("Company") or ""),
-                            position_name=str(item.get("Position") or ""),
-                            job_description=job_text,
-                            master_resume=active_resume_for_gen,
-                            model_choice=st.session_state.get("model_choice"),
-                            api_key=st.session_state.get("user_api_key"),
-                            local_base_url=st.session_state.get("local_base_url"),
-                            local_model_name=st.session_state.get("local_model_name"),
+                            st.session_state.get("model_choice"),
+                            st.session_state.get("user_api_key"),
+                            st.session_state.get("local_base_url"),
+                            st.session_state.get("local_model_name"),
+                            scenario=followup_type,
                             model_override=st.session_state.get("model_override", ""),
                             skip_guard=True,
                         )
                     else:
                         content = generator_func(
-                            active_resume_for_gen, job_text, st.session_state.get("model_choice"),
-                            st.session_state.get("user_api_key"), st.session_state.get("local_base_url"), st.session_state.get("local_model_name"),
+                            active_resume_for_gen,
+                            job_text,
+                            st.session_state.get("model_choice"),
+                            st.session_state.get("user_api_key"),
+                            st.session_state.get("local_base_url"),
+                            st.session_state.get("local_model_name"),
                             model_override=st.session_state.get("model_override", ""),
                             skip_guard=True,
                         )
-                except Exception as gen_err:
-                    st.error(f"⚠️ Could not generate {doc_type}: {gen_err}")
-                    return
-                if supports_reviewer and use_reviewer:
-                    try:
-                        audit_res = review_and_refine_document(
-                            draft_text=content,
-                            master_resume=active_resume_for_gen,
-                            job_description=job_text,
-                            doc_type=doc_type,
-                            model_choice=st.session_state.get("model_choice"),
-                            api_key=st.session_state.get("user_api_key"),
-                            local_base_url=st.session_state.get("local_base_url", ""),
-                            local_model_name=st.session_state.get("local_model_name", ""),
-                            model_override=st.session_state.get("model_override", ""),
-                            skip_guard=True,
-                        )
-                        if audit_res.revised_document and len(audit_res.revised_document.strip()) > 50:
-                            content = audit_res.revised_document
-                        audit_md = format_audit_report_markdown(audit_res, doc_label=doc_type)
-                        st.session_state[audit_cache_key] = audit_md
-                        db.update_job_field(url, "Reviewer Audit", audit_md)
-                    except Exception as rev_err:
-                        st.warning(f"Drafter pass succeeded, but Reviewer audit encountered an error: {rev_err}")
 
-                st.session_state[cache_key] = content
-                st.session_state["active_job_url"] = url
-                db.update_job_field(url, doc_type, content)
-                safe_fragment_rerun()
-    else:
-        raw_title = str(item.get("Company") or item.get("Position") or "Job")
-        if raw_title == "Unknown Company":
-            raw_title = str(item.get("Position") or "Job")
-        safe_title = re.sub(r'[^\w\-_\.]', '_', raw_title.replace(" ", "_"))
-        safe_doc_type = re.sub(r'[^\w\-_\.]', '_', doc_type.replace(" ", "_"))
-
-        ats_style_key = "classic"
-        editor_key = f"editor_{cache_key}"
-
-        def _sync_editor_to_cache():
-            if editor_key in st.session_state:
-                updated_val = st.session_state[editor_key]
-                if updated_val is not None and updated_val != st.session_state.get(cache_key):
-                    st.session_state[cache_key] = updated_val
-                    item[doc_type] = updated_val
-                    db.update_job_field(url, doc_type, updated_val)
-
-        # Ensure any pending edit in session_state is synced before rendering preview
-        _sync_editor_to_cache()
-        current_content = st.session_state[cache_key]
-
-        if doc_type == "Tailored Resume":
-            style_options = {
-                "📄 Classic Clean ATS (Arial — Standard Single-Column, Right-Aligned Dates)": "classic",
-                "✨ Modern Executive ATS (Calibri + Section Divider Rules)": "modern",
-                "🏛️ Harvard / Traditional Serif ATS (Times New Roman + Section Rules)": "serif",
-            }
-            col_tpl, col_view = st.columns([2.8, 2.4])
-            with col_tpl:
-                chosen_label = st.selectbox(
-                    "🎨 ATS Resume Template Style:",
-                    list(style_options.keys()),
-                    key=f"ats_tpl_{cache_key}",
-                    help="Formats your tailored resume directly into a single-column, ATS-parseable Word (.docx) and PDF template with centered contact header and flush-right dates—no copy-pasting needed.",
-                )
-                ats_style_key = style_options[chosen_label]
-            with col_view:
-                view_mode = st.radio(
-                    "View Mode:",
-                    ["📄 ATS Template Preview", "✏️ Edit Markdown", "🔀 Live Split View"],
-                    horizontal=True,
-                    key=f"ats_view_{cache_key}",
-                )
-
-            if view_mode == "✏️ Edit Markdown":
-                st.session_state[editor_key] = current_content
-                edited_doc = st.text_area(
-                    f"{doc_type} (Markdown — Press Ctrl+Enter or switch back to ATS Preview to see changes)",
-                    height=420,
-                    key=editor_key,
-                    on_change=_sync_editor_to_cache,
-                )
-                if edited_doc != current_content:
-                    st.session_state[cache_key] = edited_doc
-                    item[doc_type] = edited_doc
-                    db.update_job_field(url, doc_type, edited_doc)
-                    current_content = edited_doc
-            elif view_mode == "🔀 Live Split View":
-                st.session_state[editor_key] = current_content
-                sp_left, sp_right = st.columns([1, 1.15])
-                with sp_left:
-                    edited_doc = st.text_area(
-                        "✏️ Edit Markdown (Press Ctrl+Enter to refresh preview):",
-                        height=560,
-                        key=editor_key,
-                        on_change=_sync_editor_to_cache,
-                    )
-                    if edited_doc != current_content:
-                        st.session_state[cache_key] = edited_doc
-                        item[doc_type] = edited_doc
-                        db.update_job_field(url, doc_type, edited_doc)
-                        current_content = edited_doc
-                with sp_right:
-                    st.caption("📄 **Live ATS Template Preview**")
-                    st.markdown(render_ats_resume_html(current_content, template_style=ats_style_key), unsafe_allow_html=True)
-            else:
-                edited_doc = current_content
-                st.markdown(render_ats_resume_html(edited_doc, template_style=ats_style_key), unsafe_allow_html=True)
-                st.caption("💡 Switch to **✏️ Edit Markdown** or **🔀 Live Split View** above to tweak bullet points and see your updates live.")
-        else:
-            st.session_state[editor_key] = current_content
-            edited_doc = st.text_area(
-                f"{doc_type} (Markdown)",
-                height=400,
-                key=editor_key,
-                on_change=_sync_editor_to_cache,
-            )
-            if edited_doc != current_content:
-                st.session_state[cache_key] = edited_doc
-                item[doc_type] = edited_doc
-                db.update_job_field(url, doc_type, edited_doc)
-
-        if supports_reviewer:
-            if doc_type == "Tailored Resume":
-                has_pdf = is_pdf_conversion_available()
-                if has_pdf:
-                    col1, col_pdf, col2, col3 = st.columns([2.2, 2.2, 2.8, 1.3])
-                else:
-                    col1, col2, col3 = st.columns([2.5, 3.2, 1.5])
-                    col_pdf = None
-                with col1:
-                    st.download_button(
-                        "📥 Download ATS (.docx)",
-                        data=lambda: generate_ats_resume_docx(edited_doc, template_style=ats_style_key),
-                        file_name=f"ATS_Resume_{safe_title}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        type="primary",
-                        width="stretch",
-                        key=f"dl_{cache_key}",
-                    )
-                if col_pdf is not None and has_pdf:
-                    with col_pdf:
-                        pdf_src = (edited_doc, ats_style_key)
-                        pdf_state = f"pdf_bytes_{cache_key}"
-                        cached_pdf = st.session_state.get(pdf_state)
-                        if not (cached_pdf and cached_pdf[0] == pdf_src) and st.button("📕 Prepare ATS PDF", width="stretch", key=f"prep_pdf_{cache_key}"):
-                            with st.spinner("Converting to PDF (first run can take ~20s)..."):
-                                built = generate_ats_resume_pdf(*pdf_src)
-                            if built:
-                                st.session_state[pdf_state] = (pdf_src, built)
-                            else:
-                                st.warning("PDF conversion failed. Download the .docx instead, or try again.")
-                        cached_pdf = st.session_state.get(pdf_state)
-                        if cached_pdf and cached_pdf[0] == pdf_src:
-                            st.download_button(
-                                "📕 Download ATS (.pdf)",
-                                data=cached_pdf[1],
-                                file_name=f"ATS_Resume_{safe_title}.pdf",
-                                mime="application/pdf",
-                                width="stretch",
-                                key=f"dl_pdf_{cache_key}",
-                            )
-            else:
-                col1, col2, col3 = st.columns([2.5, 3.2, 1.5])
-                with col1:
-                    st.download_button(
-                        "📥 Download (.docx)",
-                        data=lambda: generate_docx_from_markdown(edited_doc),
-                        file_name=f"{safe_doc_type}_{safe_title}.docx",
-                        type="primary",
-                        width="stretch",
-                        key=f"dl_{cache_key}"
-                    )
-            with col2:
-                if st.button("🔍 Run Reviewer & ATS Fact Audit", width="stretch", key=f"audit_btn_{cache_key}"):
-                    with st.spinner(f"Auditing {doc_type} against selected Resume(s) & ATS keywords..."):
+                    audit_md = ""
+                    if doc_type in ("Tailored Resume", "Cover Letter"):
                         try:
-                            audit_resume_pool = combine_selected_resumes(default_doc_resumes, vault) if default_doc_resumes else st.session_state.get("resume_text", "")
                             audit_res = review_and_refine_document(
-                                draft_text=edited_doc,
-                                master_resume=audit_resume_pool,
+                                draft_text=content,
+                                master_resume=active_resume_for_gen,
                                 job_description=job_text,
                                 doc_type=doc_type,
                                 model_choice=st.session_state.get("model_choice"),
@@ -719,45 +536,251 @@ def document_generator(item: dict, doc_type: str, generator_func):
                                 skip_guard=True,
                             )
                             if audit_res.revised_document and len(audit_res.revised_document.strip()) > 50:
-                                st.session_state[cache_key] = audit_res.revised_document
-                                db.update_job_field(url, doc_type, audit_res.revised_document)
+                                content = audit_res.revised_document
                             audit_md = format_audit_report_markdown(audit_res, doc_label=doc_type)
-                            st.session_state[audit_cache_key] = audit_md
-                            st.session_state["active_job_url"] = url
-                            db.update_job_field(url, "Reviewer Audit", audit_md)
-                            safe_fragment_rerun()
-                        except Exception as e:
-                            st.error(f"Reviewer Audit failed: {e}")
-            with col3:
+                            st.session_state.pop(audit_warn_key, None)
+                        except Exception as a_err:
+                            audit_md = ""
+                            st.session_state[audit_warn_key] = (
+                                f"Automatic fact-check could not run ({a_err}). "
+                                "Review your draft carefully or click **Generate Fact-Check Report** below to retry."
+                            )
+
+                    st.session_state[cache_key] = content
+                    item[doc_type] = content
+                    db.update_job_field(url, doc_type, content)
+
+                    if audit_md:
+                        merged_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, audit_md)
+                        st.session_state[audit_cache_key] = audit_md
+                        item["Reviewer Audit"] = merged_audit
+                        db.update_job_field(url, "Reviewer Audit", merged_audit)
+
+                    st.session_state["active_job_url"] = url
+                    safe_fragment_rerun()
+                except Exception as e:
+                    st.error(f"Error generating {doc_type}: {e}")
+    else:
+        ats_style_key = "clean"
+        if doc_type == "Tailored Resume":
+            style_options = {
+                "clean": "Standard ATS (Clean Arial, Bold Roles)",
+                "harvard": "Harvard Style (Times New Roman, Divider Rules)",
+                "modern": "Modern Slate (Calibri, Compact Margins)",
+            }
+            c_style, _ = st.columns([3.8, 3.2])
+            with c_style:
+                chosen_label = st.selectbox(
+                    "🎨 Template Style:",
+                    options=list(style_options.values()),
+                    index=0,
+                    key=f"ats_style_sel_{cache_key}",
+                    help="Applies clean, human-designed margins, professional typography, and ATS-friendly headers to your Word and PDF exports.",
+                )
+                ats_style_key = next((k for k, v in style_options.items() if v == chosen_label), "clean")
+
+        editor_key = f"edit_{cache_key}"
+        if editor_key not in st.session_state:
+            st.session_state[editor_key] = current_content
+
+        safe_doc_type = re.sub(r'[^a-zA-Z0-9_-]', '_', doc_type)
+        pos = item.get("Position", "Job")
+        company = item.get("Company", "")
+        safe_company = re.sub(r'[^a-zA-Z0-9_-]', '_', company) if company and company != "Unknown Company" else ""
+        safe_pos = re.sub(r'[^a-zA-Z0-9_-]', '_', pos)
+        safe_title = f"{safe_company}_{safe_pos}".strip('_') if safe_company else safe_pos
+
+        view_mode = "✏️ Edit Markdown"
+        if doc_type == "Tailored Resume":
+            col_toggle, _ = st.columns([4.2, 2.8])
+            with col_toggle:
+                view_mode = st.radio(
+                    "Display Format:",
+                    ["🔀 Live Split View", "📄 Formatted ATS Preview", "✏️ Edit Markdown"],
+                    index=0,
+                    horizontal=True,
+                    key=f"view_mode_{cache_key}",
+                    label_visibility="collapsed",
+                )
+
+        if doc_type == "Tailored Resume" and view_mode == "🔀 Live Split View":
+            sp1, sp2 = st.columns([1, 1], gap="medium")
+            with sp1:
+                st.caption("✏️ **Markdown Source (Editable)**")
+                edited_doc = st.text_area(
+                    "Edit Resume Markdown:",
+                    height=580,
+                    key=editor_key,
+                    label_visibility="collapsed",
+                )
+                col_btn, _ = st.columns([3.2, 2.8])
+                with col_btn:
+                    if st.button("💾 Apply Changes", key=f"apply_{cache_key}", type="secondary", width="stretch"):
+                        st.session_state[cache_key] = edited_doc
+                        item[doc_type] = edited_doc
+                        db.update_job_field(url, doc_type, edited_doc)
+                        st.session_state.pop(f"pdf_bytes_{cache_key}", None)
+                        st.toast("✅ Changes applied and saved to database!", icon="💾")
+                        safe_fragment_rerun()
+                if edited_doc != current_content:
+                    st.session_state[cache_key] = edited_doc
+                    item[doc_type] = edited_doc
+                    db.update_job_field(url, doc_type, edited_doc)
+            with sp2:
+                st.caption("📄 **Live ATS Template Preview**")
+                preview_html = render_ats_resume_html(st.session_state[editor_key], template_style=ats_style_key)
+                st.markdown(
+                    f"""
+                    <div style="
+                        border: 1px solid rgba(128,128,128,0.25);
+                        border-radius: 6px;
+                        padding: 24px 28px;
+                        max-height: 580px;
+                        overflow-y: auto;
+                        background: #ffffff;
+                        color: #111827;
+                        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+                        margin-bottom: 12px;
+                    ">
+                        {preview_html}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        elif doc_type == "Tailored Resume" and view_mode == "📄 Formatted ATS Preview":
+            preview_html = render_ats_resume_html(st.session_state[editor_key], template_style=ats_style_key)
+            st.markdown(
+                f"""
+                <div style="
+                    border: 1px solid rgba(128,128,128,0.25);
+                    border-radius: 6px;
+                    padding: 32px 40px;
+                    max-height: 600px;
+                    overflow-y: auto;
+                    background: #ffffff;
+                    color: #111827;
+                    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+                    margin-bottom: 12px;
+                ">
+                    {preview_html}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            edited_doc = st.session_state[editor_key]
+        else:
+            edited_doc = st.text_area(
+                f"{doc_type} (Editable):",
+                height=420,
+                key=editor_key,
+            )
+            col_btn, _ = st.columns([2.5, 5.5])
+            with col_btn:
+                if st.button("💾 Apply Changes", key=f"apply_{cache_key}", type="secondary", width="stretch"):
+                    st.session_state[cache_key] = edited_doc
+                    item[doc_type] = edited_doc
+                    db.update_job_field(url, doc_type, edited_doc)
+                    st.session_state.pop(f"pdf_bytes_{cache_key}", None)
+                    st.toast("✅ Changes applied and saved to database!", icon="💾")
+                    safe_fragment_rerun()
+            if edited_doc != current_content:
+                st.session_state[cache_key] = edited_doc
+                item[doc_type] = edited_doc
+                db.update_job_field(url, doc_type, edited_doc)
+
+        if doc_type == "Tailored Resume":
+            has_pdf = is_pdf_conversion_available()
+            if has_pdf:
+                col1, col_pdf, col_reg = st.columns([2.5, 2.5, 1.5])
+            else:
+                col1, col_reg = st.columns([3.5, 1.5])
+                col_pdf = None
+            render_ats_resume_downloads(
+                markdown_text=edited_doc,
+                ats_style_key=ats_style_key,
+                file_stem=f"ATS_Resume_{safe_title}",
+                docx_key=f"dl_{cache_key}",
+                pdf_state_key=f"pdf_bytes_{cache_key}",
+                prep_pdf_key=f"prep_pdf_{cache_key}",
+                pdf_dl_key=f"dl_pdf_{cache_key}",
+                docx_label="📥 Download ATS (.docx)",
+                col_docx=col1,
+                col_pdf=col_pdf,
+            )
+            with col_reg:
                 if st.button("🔄 Regenerate", width="stretch", key=f"regen_{cache_key}"):
                     st.session_state[cache_key] = ""
                     st.session_state.pop(editor_key, None)
+                    st.session_state.pop(f"pdf_bytes_{cache_key}", None)
                     st.session_state.pop(audit_cache_key, None)
+                    st.session_state.pop(audit_warn_key, None)
                     st.session_state["active_job_url"] = url
                     db.update_job_field(url, doc_type, "")
-                    db.update_job_field(url, "Reviewer Audit", "")
+                    updated_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, "")
+                    item["Reviewer Audit"] = updated_audit
+                    db.update_job_field(url, "Reviewer Audit", updated_audit)
                     safe_fragment_rerun()
-
-            if st.session_state.get(audit_cache_key):
-                with st.expander("🛡️ View Accuracy & Fact-Check Review Report", expanded=True):
-                    st.markdown(st.session_state[audit_cache_key])
         else:
-            col1, _, col2 = st.columns([3.2, 5.8, 1.5])
+            col1, col_reg = st.columns([3.5, 1.5])
             with col1:
                 st.download_button(
                     "📥 Download (.docx)",
                     data=lambda: generate_docx_from_markdown(edited_doc),
                     file_name=f"{safe_doc_type}_{safe_title}.docx",
                     type="primary",
+                    width="stretch",
                     key=f"dl_{cache_key}"
                 )
-            with col2:
-                if st.button("🔄 Regenerate", key=f"regen_{cache_key}"):
+            with col_reg:
+                if st.button("🔄 Regenerate", width="stretch", key=f"regen_{cache_key}"):
                     st.session_state[cache_key] = ""
                     st.session_state.pop(editor_key, None)
+                    st.session_state.pop(audit_cache_key, None)
+                    st.session_state.pop(audit_warn_key, None)
                     st.session_state["active_job_url"] = url
                     db.update_job_field(url, doc_type, "")
+                    if doc_type in ("Tailored Resume", "Cover Letter"):
+                        updated_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, "")
+                        item["Reviewer Audit"] = updated_audit
+                        db.update_job_field(url, "Reviewer Audit", updated_audit)
                     safe_fragment_rerun()
+
+        if doc_type in ("Tailored Resume", "Cover Letter"):
+            audit_warn = st.session_state.get(audit_warn_key)
+            if audit_warn:
+                st.warning(f"⚠️ {audit_warn}")
+            audit_report = st.session_state.get(audit_cache_key) or db.get_doc_audit(item.get("Reviewer Audit", ""), doc_type)
+            if audit_report and str(audit_report).strip():
+                with st.expander("🛡️ Accuracy & Fact-Check Grounding Report", expanded=True):
+                    st.markdown(audit_report)
+            else:
+                with st.expander("🛡️ Accuracy & Fact-Check Grounding Report", expanded=bool(audit_warn)):
+                    st.caption("No fact-check grounding report is on file for this draft yet.")
+                    if st.button("🔍 Generate Fact-Check Report", key=f"btn_audit_{cache_key}"):
+                        with st.spinner(f"Auditing {doc_type} against selected resume profile(s)..."):
+                            try:
+                                audit_resume_pool = combine_selected_resumes(default_doc_resumes, vault) if default_doc_resumes else st.session_state.get("resume_text", "")
+                                audit_res = review_and_refine_document(
+                                    draft_text=edited_doc,
+                                    master_resume=audit_resume_pool,
+                                    job_description=job_text,
+                                    doc_type=doc_type,
+                                    model_choice=st.session_state.get("model_choice"),
+                                    api_key=st.session_state.get("user_api_key"),
+                                    local_base_url=st.session_state.get("local_base_url", ""),
+                                    local_model_name=st.session_state.get("local_model_name", ""),
+                                    model_override=st.session_state.get("model_override", ""),
+                                    skip_guard=True,
+                                )
+                                audit_md = format_audit_report_markdown(audit_res, doc_label=doc_type)
+                                merged_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, audit_md)
+                                st.session_state[audit_cache_key] = audit_md
+                                st.session_state.pop(audit_warn_key, None)
+                                item["Reviewer Audit"] = merged_audit
+                                db.update_job_field(url, "Reviewer Audit", merged_audit)
+                                safe_fragment_rerun()
+                            except Exception as a_err:
+                                st.error(f"Audit failed: {a_err}")
 
 
 def _format_gate_pill(gate_val: str) -> str:
@@ -769,7 +792,8 @@ def _format_gate_pill(gate_val: str) -> str:
     return "✅ PASS"
 
 
-def render_history_card(item: dict, is_expanded: bool = False):
+def render_active_job_dossier(item: dict):
+    """Renders the complete evaluation dossier and tailoring tabs for the selected job."""
     score = int(item.get("Score", 0) or 0)
     eligible = bool(item.get("Eligible", True))
     fit_band = get_fit_band(score, eligible)
@@ -779,288 +803,399 @@ def render_history_card(item: dict, is_expanded: bool = False):
     company_suffix = f" at {company}" if company else ""
     deadline_badge = format_deadline_badge(item.get("Deadline", ""))
     deadline_header = f" · 🗓️ {deadline_badge}" if deadline_badge != "—" else ""
+    raw_url = str(item.get("URL") or "")
+    card_hash = hashlib.sha256((raw_url or item.get("Position", "")).encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+    # Full details lazy-load
+    item = {**item, **db.load_job_detail(raw_url)}
+
+    st.markdown(f"### {fit_band} ({score}/100) — {item.get('Position', 'Role')}{company_suffix}")
     
-    card_hash = hashlib.sha256((item.get("URL") or item.get("Position", "")).encode("utf-8", errors="ignore")).hexdigest()[:12]
-    if is_expanded:
-        st.html("<div id='active_job_card' style='scroll-margin-top: 80px;'></div>")
-    exp_key = f"hist_exp_{card_hash}"
-    # Force the card open once per jump/row-click, but let the user collapse it afterwards
-    open_token = (st.session_state.get("active_job_url"), st.session_state.get("_hist_jump_nonce", 0))
-    if is_expanded and st.session_state.get("_hist_forced_token") != open_token:
-        st.session_state[exp_key] = True
-        st.session_state["_hist_forced_token"] = open_token
-    card = st.expander(
-        f"{fit_band} ({score}/100) — {item.get('Position', 'Role')}{company_suffix}{deadline_header} ({item.get('URL', 'Link')})",
-        expanded=is_expanded, key=exp_key, on_change="rerun",
-    )
-    if not card.open:
-        return
-    # Heavy columns (documents, Job Text) are fetched only for cards the user opens
-    item = {**item, **db.load_job_detail(item.get("URL"))}
-    with card:
-        tabs = st.tabs([
-            "Overview",
-            "⚡ Tailored Resume",
-            "✉️ Cover Letter",
-            "📋 Application Answers",
-            "🎤 Interview Prep",
-            "📬 Follow-Up Notes",
-            "🎯 Networking Messages",
-            "🏢 Company Research Guide",
-        ], key=f"hist_tabs_{card_hash}", on_change="rerun")
-        with tabs[0]:
-            c1, c2, _, c_del = st.columns([1.4, 2.2, 5.0, 1.4])
-            raw_url = str(item.get("URL") or "")
-            if raw_url.startswith(("http://", "https://")):
-                c1.link_button("🚀 Apply to this Job", raw_url, type="primary")
-            with c2:
-                application_status_tracker(item)
-            with c_del:
-                pos_title = item.get("Position") or "Role"
-                if db.job_has_saved_work(item):
-                    with st.popover("🗑️ Delete", width="stretch"):
-                        st.warning("This posting has saved documents or an active application status.")
-                        if st.button("Confirm Delete", type="primary", key=f"confirm_del_card_{card_hash}", width="stretch"):
-                            db.delete_job_by_url(raw_url, keep_seen=True)
-                            _clear_deleted_job_state([raw_url])
-                            st.toast(f"🗑️ Removed '{pos_title}' (marked as Seen).")
-                            st.rerun()
-                else:
-                    if st.button("🗑️ Delete", key=f"del_card_{card_hash}", width="stretch", help="Delete this posting from History (keeps it marked as Seen so future scrapes skip it)"):
-                        db.delete_job_by_url(raw_url, keep_seen=True)
-                        _clear_deleted_job_state([raw_url])
-                        st.toast(f"🗑️ Removed '{pos_title}' (marked as Seen).")
-                        st.rerun()
+    # Top Action Row
+    c_apply, c_status, _, c_del = st.columns([1.6, 2.2, 4.2, 1.2], vertical_alignment="center")
+    with c_apply:
+        if raw_url.startswith(("http://", "https://")):
+            st.link_button("🚀 View/Apply to Job", raw_url, type="primary", width="stretch")
+    with c_status:
+        application_status_tracker(item)
+    with c_del:
+        pos_title = item.get("Position") or "Role"
+        if db.job_has_saved_work(item):
+            with st.popover("🗑️ Delete", width="stretch"):
+                st.warning("This posting has saved documents or an active status.")
+                if st.button("Confirm", type="primary", key=f"confirm_del_active_{card_hash}", width="stretch"):
+                    db.delete_job_by_url(raw_url, keep_seen=True)
+                    _clear_deleted_job_state([raw_url])
+                    st.toast(f"🗑️ Removed '{pos_title}'")
+                    st.rerun()
+        else:
+            if st.button("🗑️ Delete", key=f"del_active_{card_hash}", width="stretch", help="Delete posting from History"):
+                db.delete_job_by_url(raw_url, keep_seen=True)
+                _clear_deleted_job_state([raw_url])
+                st.toast(f"🗑️ Removed '{pos_title}'")
+                st.rerun()
 
-            risk = db.check_repost_risk(item.get("Company", ""), item.get("Position", ""), item.get("URL", ""))
-            if risk:
-                if risk.get("is_ghost_risk"):
-                    st.warning(
-                        f"👻 **Repeated Listing Warning:** {risk['badge_text']}. "
-                        f"This job was first spotted on `{risk['first_seen']}` across {risk['count']} distinct postings over {risk['days_span']} days. "
-                        "Employers frequently relist stale or churned roles—verify with a recruiter or hiring manager before over-investing time."
-                    )
-                else:
-                    st.info(f"🔄 **Listing Activity:** {risk['badge_text']} (First seen: `{risk['first_seen']}`).")
+    # Workspace Tabs
+    tabs = st.tabs([
+        "Overview & Fit",
+        "⚡ Tailored Resume",
+        "✉️ Cover Letter",
+        "📋 Application Answers",
+        "🎤 Interview Prep",
+        "📬 Follow-Up Notes",
+        "🎯 Outreach Messages",
+        "🏢 Company Research Guide",
+    ], key=f"dossier_tabs_{card_hash}")
 
-            applied_date = item.get("Applied Date", "")
-            status_up = item.get("Status Updated", "")
-            if applied_date:
-                st.caption(f"📅 **Application Timeline:** Submitted on `{applied_date}`" + (f" · Status updated on `{status_up}`" if status_up else ""))
-                
-            if not eligible:
-                st.error(f"❌ **DISQUALIFIED:** {item.get('Disqualification Reason', '')}")
-            elif score >= 75:
-                st.success(f"✅ **STRONG FIT:** {score} / 100")
-            elif score >= 60:
-                st.info(f"🟢 **GOOD FIT:** {score} / 100")
-            elif score >= 45:
-                st.warning(f"⚖️ **MODERATE FIT:** {score} / 100")
+    with tabs[0]:
+        risk = db.check_repost_risk(item.get("Company", ""), item.get("Position", ""), item.get("URL", ""))
+        if risk:
+            if risk.get("is_ghost_risk"):
+                st.warning(
+                    f"👻 **Repeated Listing Warning:** {risk['badge_text']}. "
+                    f"Spotted on `{risk['first_seen']}` across {risk['count']} distinct postings over {risk['days_span']} days."
+                )
             else:
-                st.warning(f"⚠️ **WEAK / POOR FIT:** {score} / 100")
+                st.info(f"🔄 **Listing Activity:** {risk['badge_text']} (First seen: `{risk['first_seen']}`).")
 
-            # Pre-scoring Gates & Metadata Row
-            elig_gate = _format_gate_pill(item.get("Eligibility Gate", "PASS" if eligible else "FAIL"))
-            loc_gate = _format_gate_pill(item.get("Location Gate", "PASS"))
-            meta_parts = [
-                f"**Requirements Check:** `{elig_gate}`",
-                f"**Location Check:** `{loc_gate}`",
-            ]
-            if company:
-                meta_parts.insert(0, f"**Company:** {company}")
-            if deadline_badge != "—":
-                meta_parts.append(f"**Deadline:** `{deadline_badge}`")
-            matched_res_str = str(item.get("Matched Resumes") or "").strip()
-            if matched_res_str and matched_res_str.lower() != "nan":
-                meta_parts.append(f"**Resume(s):** `{matched_res_str}`")
-            st.markdown(" &nbsp;|&nbsp; ".join(meta_parts))
+        applied_date = item.get("Applied Date", "")
+        status_up = item.get("Status Updated", "")
+        if applied_date:
+            st.caption(f"📅 **Application Timeline:** Submitted on `{applied_date}`" + (f" · Status updated on `{status_up}`" if status_up else ""))
 
-            # Multi-Dimensional Sub-Score Breakdown
-            tech_s = int(item.get("Technical Score", 0) or 0)
-            exp_s = int(item.get("Experience Score", 0) or 0)
-            beh_s = int(item.get("Behavioral Score", 0) or 0)
-            car_s = int(item.get("Career Score", 0) or 0)
-            if any(v > 0 for v in (tech_s, exp_s, beh_s, car_s)):
-                with st.container(border=True):
-                    st.caption("📊 **Match Score Breakdown** *(30% Skills · 25% Experience · 15% Work Style · 30% Career Goals)*")
-                    sc1, sc2, sc3, sc4 = st.columns(4)
-                    with sc1:
-                        st.metric("🛠️ Skills & Tools (30%)", f"{tech_s}/100")
-                        st.progress(min(max(tech_s / 100.0, 0.0), 1.0))
-                    with sc2:
-                        st.metric("📈 Experience Match (25%)", f"{exp_s}/100")
-                        st.progress(min(max(exp_s / 100.0, 0.0), 1.0))
-                    with sc3:
-                        st.metric("🤝 Work Style & Team Fit (15%)", f"{beh_s}/100")
-                        st.progress(min(max(beh_s / 100.0, 0.0), 1.0))
-                    with sc4:
-                        st.metric("🎯 Career Goals Match (30%)", f"{car_s}/100")
-                        st.progress(min(max(car_s / 100.0, 0.0), 1.0))
-                
-            st.write(f"**Summary:** {item.get('Summary', '')}")
-            
-            if item.get("Red Flags"):
-                st.warning("🚨 **Red Flags & Dealbreakers:**")
-                for f in str(item["Red Flags"]).split(" | "):
-                    if f.strip():
-                        st.markdown(f"- ⚠️ {f.strip()}")
-            
-            if eligible:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("**Matching Skills:**")
-                    for skill in str(item.get("Matching Skills", "")).split(", "):
-                        if skill.strip():
-                            st.markdown(f"- ✅ {skill.strip()}")
-                with col2:
-                    st.markdown("**Missing Skills / Gaps:**")
-                    for gap in str(item.get("Missing Skills", "")).split(", "):
-                        if gap.strip():
-                            st.markdown(f"- ⚠️ {gap.strip()}")
-                            
-        with tabs[1]:
-            if tabs[1].open:
-                document_generator(item, "Tailored Resume", tailor_resume)
-        with tabs[2]:
-            if tabs[2].open:
-                document_generator(item, "Cover Letter", tailor_cover_letter)
-        with tabs[3]:
-            if tabs[3].open:
-                st.caption("Generates quick, character-counted answers for online job applications (short pitches, introductions, and 'Why this company' answers).")
-                document_generator(item, "Application QA", generate_application_qa)
-        with tabs[4]:
-            if tabs[4].open:
-                st.caption("Generates interview practice questions, realistic story examples (STAR method), ways to address missing skills, and smart questions to ask the interviewer.")
-                document_generator(item, "Interview Prep", generate_interview_prep)
-        with tabs[5]:
-            if tabs[5].open:
-                st.caption("Drafts concise follow-up and thank-you notes for email and LinkedIn (60–120 words).")
-                document_generator(item, "Followup Note", generate_followup_note)
-        with tabs[6]:
-            if tabs[6].open:
-                st.caption("Generates personalized LinkedIn connection notes (under 300 characters) for hiring managers, recruiters, and peers, plus a direct email draft.")
-                document_generator(item, "Outreach Message", generate_outreach_messages)
-        with tabs[7]:
-            if tabs[7].open:
-                st.caption("Creates a complete company overview covering what they do, tools they use, recent news, key challenges, team culture, and winning interview talking points.")
-                document_generator(item, "Company Intel", generate_deep_company_brief)
+        if not eligible:
+            st.error(f"❌ **DISQUALIFIED:** {item.get('Disqualification Reason', '')}")
+        elif score >= 75:
+            st.success(f"✅ **STRONG FIT:** {score} / 100")
+        elif score >= 60:
+            st.info(f"🟢 **GOOD FIT:** {score} / 100")
+        elif score >= 45:
+            st.warning(f"⚖️ **MODERATE FIT:** {score} / 100")
+        else:
+            st.warning(f"⚠️ **WEAK / POOR FIT:** {score} / 100")
+
+        # Metadata Row
+        elig_gate = _format_gate_pill(item.get("Eligibility Gate", "PASS" if eligible else "FAIL"))
+        loc_gate = _format_gate_pill(item.get("Location Gate", "PASS"))
+        meta_parts = [
+            f"**Requirements:** `{elig_gate}`",
+            f"**Location:** `{loc_gate}`",
+        ]
+        if company:
+            meta_parts.insert(0, f"**Company:** {company}")
+        if deadline_badge != "—":
+            meta_parts.append(f"**Deadline:** `{deadline_badge}`")
+        matched_res_str = str(item.get("Matched Resumes") or "").strip()
+        if matched_res_str and matched_res_str.lower() != "nan":
+            meta_parts.append(f"**Resume(s):** `{matched_res_str}`")
+        st.markdown(" &nbsp;|&nbsp; ".join(meta_parts))
+
+        # 4-Pillar Score Breakdown
+        tech_s = int(item.get("Technical Score", 0) or 0)
+        exp_s = int(item.get("Experience Score", 0) or 0)
+        beh_s = int(item.get("Behavioral Score", 0) or 0)
+        car_s = int(item.get("Career Score", 0) or 0)
+        if any(v > 0 for v in (tech_s, exp_s, beh_s, car_s)):
+            with st.container(border=True):
+                st.caption("📊 **Match Score Breakdown** *(30% Skills · 25% Experience · 15% Work Style · 30% Career Goals)*")
+                sc1, sc2, sc3, sc4 = st.columns(4)
+                with sc1:
+                    st.metric("🛠️ Skills & Tools (30%)", f"{tech_s}/100")
+                    st.progress(min(max(tech_s / 100.0, 0.0), 1.0))
+                with sc2:
+                    st.metric("📈 Experience Match (25%)", f"{exp_s}/100")
+                    st.progress(min(max(exp_s / 100.0, 0.0), 1.0))
+                with sc3:
+                    st.metric("🤝 Work Style & Team (15%)", f"{beh_s}/100")
+                    st.progress(min(max(beh_s / 100.0, 0.0), 1.0))
+                with sc4:
+                    st.metric("🎯 Career Goals (30%)", f"{car_s}/100")
+                    st.progress(min(max(car_s / 100.0, 0.0), 1.0))
+
+        st.write(f"**Summary:** {item.get('Summary', '')}")
+
+        if item.get("Red Flags"):
+            st.warning("🚨 **Red Flags & Dealbreakers:**")
+            for f in str(item["Red Flags"]).split(" | "):
+                if f.strip():
+                    st.markdown(f"- ⚠️ {f.strip()}")
+
+        if eligible:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Matching Skills:**")
+                for skill in str(item.get("Matching Skills", "")).split(", "):
+                    if skill.strip():
+                        st.markdown(f"- ✅ {skill.strip()}")
+            with col2:
+                st.markdown("**Missing Skills / Gaps:**")
+                for gap in str(item.get("Missing Skills", "")).split(", "):
+                    if gap.strip():
+                        st.markdown(f"- ⚠️ {gap.strip()}")
+
+    with tabs[1]:
+        document_generator(item, "Tailored Resume", tailor_resume)
+    with tabs[2]:
+        document_generator(item, "Cover Letter", tailor_cover_letter)
+    with tabs[3]:
+        st.caption("⚡ Quick, character-counted answers for online applications and screening questions.")
+        document_generator(item, "Application QA", generate_application_qa)
+    with tabs[4]:
+        st.caption("🎯 Realistic interview practice questions, STAR story frameworks, and smart questions to ask.")
+        document_generator(item, "Interview Prep", generate_interview_prep)
+    with tabs[5]:
+        st.caption("📬 Concise 60–120 word follow-up and thank-you notes for email and LinkedIn.")
+        document_generator(item, "Followup Note", generate_followup_note)
+    with tabs[6]:
+        st.caption("💬 Under-300-character LinkedIn notes for hiring managers, recruiters, and peers.")
+        document_generator(item, "Outreach Message", generate_outreach_messages)
+    with tabs[7]:
+        st.caption("🏢 Strategic company briefing: business model, tech stack, news, and talking points.")
+        document_generator(item, "Company Intel", generate_deep_company_brief)
 
 
-# Helper to safely determine the job source without crashing on old Pandas NaN data
-def get_source(item):
-    src = item.get("Source")
-    if pd.isna(src) or not src:
-        return "Manual"
-    return str(src).strip()
-
-
-# --- Build the Tabbed Layout (Intelligently order so active source or selected row's source is first) ---
-active_job = None
-if active_job_id is not None and 0 <= active_job_id < len(all_saved_jobs):
-    active_job = all_saved_jobs[active_job_id]
-    st.session_state["active_job_url"] = active_job.get("URL")
-elif st.session_state.get("active_job_url"):
-    target_url = st.session_state.get("active_job_url")
-    active_job = next((j for j in all_saved_jobs if j.get("URL") == target_url), None)
-
-if active_job is not None:
-    active_source = get_source(active_job)
-    st.session_state["active_history_source"] = active_source
+# --- MAIN EVALUATIONS TABLE & DETAIL WORKSPACE ---
+if filtered_df.empty:
+    if history_view_mode == "archived" and archived_total_count == 0:
+        st.info("No archived postings yet. Change any posting's status to **Archived** to move it into this view.")
+    else:
+        st.info("No postings match your search filters. Try clearing or relaxing the search criteria above.")
 else:
-    active_source = st.session_state.get("active_history_source", "Scraper")
+    # Precomputed styling lookup to avoid runtime list/string allocation in hot loops
+    current_active_url = st.session_state.get("active_job_url")
+    _status_colors = {
+        "Applied": "rgba(30,136,229,0.18)",
+        "Interviewing": "rgba(142,68,173,0.18)",
+        "Waitlisted": "rgba(245,124,0,0.18)",
+        "Rejected": "rgba(229,57,53,0.18)",
+        "Rejected (Application)": "rgba(229,57,53,0.18)",
+        "Rejected (Interview)": "rgba(183,28,28,0.22)",
+        "Ghosted / Stale": "rgba(158,158,158,0.18)",
+        "Archived": "rgba(117,117,117,0.18)",
+        "Offer": "rgba(67,160,71,0.22)",
+    }
+    _active_row_style = "background-color: rgba(147, 51, 234, 0.45); font-weight: 600; color: #ffffff;"
 
-source_tabs_config = [
-    ("Scraper", "🕸️ Scraper Batch", "No Scraper batch jobs evaluated yet."),
-    ("LinkedIn", "🔗 LinkedIn Inbox", "No LinkedIn extension jobs evaluated yet."),
-    ("Manual", "📝 Manual Entries", "No manual entries evaluated yet. (Note: Old jobs from before the update are also stored here)."),
-]
-# Move active source to the front
-source_tabs_config.sort(key=lambda x: 0 if x[0] == active_source else 1)
+    def highlight_status(row):
+        if current_active_url and row.get("URL") == current_active_url:
+            return [_active_row_style] * len(row)
+        bg = _status_colors.get(row.get("Application Status", "Not Applied"), "")
+        return [f"background-color: {bg}"] * len(row)
 
-allowed_indices = set(df["Original_Index"].tolist())
-if active_job is not None:
-    # Ensure active_job is always included in allowed_indices even if filters would have excluded it
-    for i, j in enumerate(all_saved_jobs):
-        if j.get("URL") == active_job.get("URL"):
-            allowed_indices.add(i)
-            break
+    col_tbl_hdr, col_tbl_meta = st.columns([6.2, 3.8], vertical_alignment="bottom")
+    with col_tbl_hdr:
+        st.markdown(f"#### 📊 Evaluated Postings & Match Breakdown ({len(filtered_df)})")
+        st.caption("Click any row in the table below to inspect its detailed evaluation and tailored application workspace:")
+    with col_tbl_meta:
+        show_all_cols = st.checkbox(
+            "Show 4-Pillar Breakdown in Table",
+            value=False,
+            key="chk_eval_table_all_cols",
+            help="Show granular Skills, Experience, Style, Goals scores and raw skill lists directly in the table."
+        )
+        if len(filtered_df) != len(all_saved_jobs):
+            st.caption(f"Showing **{len(filtered_df)}** of {len(all_saved_jobs)} total saved jobs")
+        else:
+            st.caption(f"Showing all **{len(all_saved_jobs)}** saved jobs")
 
-tab_elements = st.tabs([cfg[1] for cfg in source_tabs_config])
-for tab, (src_name, _, empty_msg) in zip(tab_elements, source_tabs_config):
-    with tab:
-        src_jobs = [j for i, j in enumerate(all_saved_jobs) if get_source(j) == src_name and i in allowed_indices]
-        if not src_jobs:
-            if filter_selection != "All" or date_filter_selection != "All Dates":
-                st.info(f"No {src_name} postings match the selected filter(s).")
-            else:
-                st.info(empty_msg)
-            continue
+    # Table columns definition
+    if show_all_cols:
+        eval_table_cols = [
+            "Position",
+            "Company_Display",
+            "Assessment",
+            "Score",
+            "Technical Score",
+            "Experience Score",
+            "Behavioral Score",
+            "Career Score",
+            "Matching Skills",
+            "Missing Skills",
+            "Red Flags",
+            "Signals",
+            "Deadline_Display",
+            "Application Status",
+            "Clean_Source",
+            "URL",
+        ]
+    else:
+        eval_table_cols = [
+            "Position",
+            "Company_Display",
+            "Assessment",
+            "Score",
+            "Signals",
+            "Application Status",
+            "Deadline_Display",
+            "Clean_Source",
+            "URL",
+        ]
+    valid_cols = [c for c in eval_table_cols if c in filtered_df.columns]
+    styled_df = filtered_df[valid_cols].rename(
+        columns={
+            "Company_Display": "Company",
+            "Deadline_Display": "Deadline",
+            "Clean_Source": "Source",
+        }
+    ).style.apply(highlight_status, axis=1)
 
-        # Group postings by evaluation date
-        groups = defaultdict(list)
-        for j in src_jobs:
-            d = parse_job_date(j.get("Timestamp", ""))
-            groups[d].append(j)
+    column_configurations = {
+        "Score": st.column_config.ProgressColumn(
+            "Overall Fit",
+            help="Weighted 4-pillar match score (0-100)",
+            min_value=0,
+            max_value=100,
+            format="%d",
+        ),
+        "Technical Score": st.column_config.NumberColumn(
+            "Skills (30%)",
+            help="Technical skills & tool compatibility",
+            format="%d",
+        ),
+        "Experience Score": st.column_config.NumberColumn(
+            "Exp (25%)",
+            help="Seniority and domain depth match",
+            format="%d",
+        ),
+        "Behavioral Score": st.column_config.NumberColumn(
+            "Style (15%)",
+            help="Work style & culture fit",
+            format="%d",
+        ),
+        "Career Score": st.column_config.NumberColumn(
+            "Goals (30%)",
+            help="Long-term trajectory & role alignment",
+            format="%d",
+        ),
+        "URL": st.column_config.LinkColumn(
+            "Listing URL",
+            display_text="View Listing ➔",
+        ),
+        "Matching Skills": st.column_config.TextColumn(
+            "Matching Skills",
+            width="medium",
+        ),
+        "Missing Skills": st.column_config.TextColumn(
+            "Gaps / Missing",
+            width="medium",
+        ),
+        "Red Flags": st.column_config.TextColumn(
+            "Red Flags",
+            width="medium",
+        ),
+    }
 
-        sorted_dates = sorted(groups.keys(), key=lambda d: d if d is not None else date.min, reverse=True)
-
-        for job_date in sorted_dates:
-            day_jobs = groups[job_date]
-            # Order newest evaluation first within each day
-            day_jobs.sort(key=lambda x: str(x.get("Timestamp", "")), reverse=True)
-
-            day_label = format_day_group_label(job_date, today)
-            contains_active = (active_job is not None and any(j.get("URL") == active_job.get("URL") for j in day_jobs))
-
-            # Smart expand: if a table row is clicked, expand the day container holding that job.
-            # Otherwise, expand today's evaluations by default, or expand if there is only 1 day group.
-            if active_job is not None:
-                is_day_expanded = contains_active
-            else:
-                is_day_expanded = (job_date == today) or (len(sorted_dates) == 1)
-
-            day_count_text = f"**{len(day_jobs)}** posting{'s' if len(day_jobs) != 1 else ''}"
-            with st.expander(f"{day_label} · {day_count_text}", expanded=is_day_expanded):
-                for j in day_jobs:
-                    is_active_card = (active_job is not None and j.get("URL") == active_job.get("URL"))
-                    render_history_card(j, is_expanded=is_active_card)
-
-# Auto-scroll directly to the expanded card when jumping from Gallery or clicking table row
-should_scroll = (active_job_id is not None) or st.session_state.get("jump_to_card")
-if should_scroll:
-    st.html(
-        f"""
-        <script>
-        (function() {{
-            let attempts = 0;
-            const maxAttempts = 60;
-            const interval = setInterval(function() {{
-                attempts++;
-                const doc = window.parent ? window.parent.document : document;
-                const target = doc.getElementById('active_job_card');
-                if (target) {{
-                    clearInterval(interval);
-                    target.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-                    const expander = target.closest('[data-testid="stExpander"]') || target.nextElementSibling;
-                    if (expander) {{
-                        expander.style.transition = 'box-shadow 0.4s ease';
-                        expander.style.boxShadow = '0 0 0 3px rgba(33, 150, 243, 0.6)';
-                        setTimeout(function() {{
-                            expander.style.boxShadow = '';
-                        }}, 2500);
-                    }}
-                }} else if (attempts >= maxAttempts) {{
-                    clearInterval(interval);
-                    const fallback = doc.getElementById('details');
-                    if (fallback) {{
-                        fallback.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
-                    }}
-                }}
-            }}, 50);
-        }})();
-        </script>
-        <!-- {time.time()} -->
-        """,
-        unsafe_allow_javascript=True
+    selection_event = st.dataframe(
+        styled_df,
+        width="stretch",
+        on_select="rerun",
+        selection_mode=["single-row", "single-cell"],
+        column_config=column_configurations,
+        key="history_evaluations_main_table",
     )
-    st.session_state.pop("jump_to_card", None)
+
+    # Synchronize table selection with active job (supports both row selection and clicking any cell in a row)
+    selected_row_idx = None
+    if selection_event.selection.rows:
+        selected_row_idx = selection_event.selection.rows[0]
+    elif getattr(selection_event.selection, "cells", None) and selection_event.selection.cells:
+        # Cell selection tuple: (row_int_index, column_name)
+        cell_item = selection_event.selection.cells[0]
+        if isinstance(cell_item, (tuple, list)) and len(cell_item) > 0:
+            selected_row_idx = cell_item[0]
+        elif isinstance(cell_item, dict) and "row" in cell_item:
+            selected_row_idx = cell_item["row"]
+
+    # Extract selection signature to detect fresh user click interactions
+    current_sel_sig = (
+        tuple(selection_event.selection.rows),
+        tuple(
+            (c[0], c[1]) if isinstance(c, (tuple, list))
+            else (c.get("row"), c.get("column")) if isinstance(c, dict)
+            else str(c)
+            for c in getattr(selection_event.selection, "cells", [])
+        ),
+    )
+    last_handled_sig = st.session_state.get("_last_handled_table_sig")
+
+    if selected_row_idx is not None and 0 <= selected_row_idx < len(filtered_df):
+        selected_row = filtered_df.iloc[selected_row_idx]
+        selected_url = selected_row["URL"]
+        # If user clicked a row or cell, register interaction and trigger auto-scroll
+        if current_sel_sig != last_handled_sig:
+            st.session_state["_last_handled_table_sig"] = current_sel_sig
+            st.session_state["active_job_url"] = selected_url
+            orig_idx = int(selected_row["Original_Index"])
+            active_job = all_saved_jobs[orig_idx]
+            st.session_state["_hist_jump_nonce"] = st.session_state.get("_hist_jump_nonce", 0) + 1
+            st.session_state["scroll_trigger_nonce"] = st.session_state.get("scroll_trigger_nonce", 0) + 1
+            st.rerun()
+    elif not selection_event.selection.rows and not getattr(selection_event.selection, "cells", None):
+        st.session_state["_last_handled_table_sig"] = None
+
+    # Handle external redirection jumps (e.g. from Saved Documents Gallery)
+    if st.session_state.get("jump_to_card"):
+        st.session_state["scroll_trigger_nonce"] = st.session_state.get("scroll_trigger_nonce", 0) + 1
+        st.session_state.pop("jump_to_card", None)
+
+    # If active_job is set, update its dictionary data
+    current_active_url = st.session_state.get("active_job_url")
+    if current_active_url:
+        matching_rows = filtered_df[filtered_df["URL"] == current_active_url]
+        if not matching_rows.empty:
+            orig_idx = int(matching_rows.iloc[0]["Original_Index"])
+            active_job = all_saved_jobs[orig_idx]
+
+    st.markdown("---")
+
+    # Render Active Job Dossier & Workspace
+    if active_job:
+        st.html("<div id='active_job_workspace' style='scroll-margin-top: 75px;'></div>")
+        with st.container(border=True):
+            render_active_job_dossier(active_job)
+
+        # Smooth auto-scroll when a row is clicked (reliably triggers on every single interaction)
+        current_scroll_nonce = st.session_state.get("scroll_trigger_nonce", 0)
+        last_scrolled_nonce = st.session_state.get("_last_executed_scroll_nonce", -1)
+
+        if current_scroll_nonce > 0 and current_scroll_nonce != last_scrolled_nonce:
+            st.session_state["_last_executed_scroll_nonce"] = current_scroll_nonce
+
+            st.iframe(
+                f"""<!DOCTYPE html>
+                <html>
+                <head>
+                <style>html, body {{ margin: 0; padding: 0; border: none; overflow: hidden; background: transparent; }}</style>
+                </head>
+                <body>
+                <script>
+                (function() {{
+                    let attempts = 0;
+                    const maxAttempts = 60;
+                    const interval = setInterval(function() {{
+                        attempts++;
+                        try {{
+                            const doc = window.parent ? window.parent.document : document;
+                            const target = doc.getElementById('active_job_workspace');
+                            if (target) {{
+                                clearInterval(interval);
+                                target.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                            }} else if (attempts >= maxAttempts) {{
+                                clearInterval(interval);
+                            }}
+                        }} catch (e) {{
+                            if (attempts >= maxAttempts) clearInterval(interval);
+                        }}
+                    }}, 30);
+                }})();
+                </script>
+                <!-- nonce: {current_scroll_nonce} -->
+                </body>
+                </html>""",
+                height=1,
+            )
+    else:
+        st.info("Select a row in the table above to view its detailed evaluation dossier and generate tailored materials.")
+
+# Clean up jump flags
+st.session_state.pop("jump_to_card", None)

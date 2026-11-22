@@ -9,7 +9,9 @@ from sankey_utils import (
     generate_safe_job_key,
     parse_date_safely,
     compute_sankey_data,
-    build_sankey_figure,
+    build_sankey_echarts_spec,
+    resolve_sankey_selection,
+    sync_sankey_stage_selection,
     render_sankey_section,
 )
 
@@ -18,7 +20,9 @@ __all__ = [
     "generate_safe_job_key",
     "parse_date_safely",
     "compute_sankey_data",
-    "build_sankey_figure",
+    "build_sankey_echarts_spec",
+    "resolve_sankey_selection",
+    "sync_sankey_stage_selection",
     "render_sankey_section",
 ]
 
@@ -27,7 +31,7 @@ def render_pipeline_funnel_page():
     st.subheader("🌊 Application Tracker")
     st.caption(
         "Visual chart tracking your jobs from first review to applications, interviews, and job offers. "
-        "Drag boxes to rearrange; hover over lines to see job counts."
+        "Click any stage box or branch to filter postings; hover over lines to see job counts."
     )
 
     history_data = db.load_all_jobs(summary_only=True)

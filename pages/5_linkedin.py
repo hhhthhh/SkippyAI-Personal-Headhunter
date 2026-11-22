@@ -1,26 +1,21 @@
 import sys
 import os
 import io
-import json
-import time
 import socket
+import hashlib
 import zipfile
-from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import streamlit as st
-import database as db
-from evaluator import evaluate_job
 from utils import (
-    render_completion_card,
     check_and_handle_pipeline_completion,
+    render_completion_card,
     render_resume_selector,
     combine_selected_resumes,
-    render_pipeline_spinner_html,
 )
 
-from webhook import load_inbox_jobs, save_inbox_jobs, clear_inbox, remove_inbox_job_by_url
+from webhook import load_inbox_jobs, save_inbox_jobs, remove_inbox_job_by_url, get_or_create_webhook_token
 from pipeline import pipeline_manager
 
 WEBHOOK_PORT = int(os.environ.get("SKIPPY_WEBHOOK_PORT", "8000"))
@@ -40,8 +35,6 @@ with col_desc:
 with col_back:
     if st.button("⬅️ Back to Job Search", width="stretch"):
         st.switch_page("pages/1_scraper.py")
-    if st.button("📋 Search Results", width="stretch", key="btn_goto_scraper_results_from_li"):
-        st.switch_page("pages/7_scraper_results.py")
 render_resume_selector(key_suffix="linkedin_page", in_sidebar=False)
 st.markdown("---")
 
@@ -76,33 +69,7 @@ def _get_extension_zip_bytes() -> bytes | None:
 @st.fragment(run_every="3s")
 def render_auto_inbox():
     check_and_handle_pipeline_completion()
-
     status = pipeline_manager.get_status()
-    if status.get("is_running") and status.get("source") == "LinkedIn":
-        with st.container(border=True):
-            if status.get("is_stopping"):
-                render_pipeline_spinner_html(
-                    "Stopping Review...",
-                    "Halting LinkedIn inbox evaluation gracefully...",
-                    is_stopping=True,
-                )
-                st.button("🛑 Stopping...", key="stop_linkedin_pipeline_main", disabled=True)
-            else:
-                total = max(status.get("total", 1), 1)
-                completed = status.get("completed", 0)
-                prog = min(completed / total, 1.0)
-                cur = status.get("current_job", "Working...")
-                render_pipeline_spinner_html(
-                    "Reviewing Jobs in the Background...",
-                    f"Evaluating ({completed}/{total}): {cur}",
-                )
-                st.progress(prog, text=f"Reviewing ({completed}/{total}): {cur}")
-                st.info("💡 **You can freely explore other pages:** Reviewing continues in the background while you browse.")
-                if st.button("🛑 Stop Review", key="stop_linkedin_pipeline_main"):
-                    pipeline_manager.cancel()
-                    st.rerun()
-        st.markdown("---")
-
     pending_jobs = load_inbox_jobs()
             
     if pending_jobs:
@@ -127,7 +94,8 @@ def render_auto_inbox():
                 snippet = clean_text[:500] + "..." if len(clean_text) > 500 else clean_text
                 st.markdown(f"**Description Snippet:**\n> {snippet}")
                 
-                if st.button("🗑️ Remove from Queue", key=f"remove_job_{i}_{hash(raw_url)}"):
+                url_digest = hashlib.sha256(raw_url.encode("utf-8", errors="ignore")).hexdigest()[:12]
+                if st.button("🗑️ Remove from Queue", key=f"remove_job_{i}_{url_digest}"):
                     if raw_url:
                         remove_inbox_job_by_url(raw_url)
                     else:
@@ -161,6 +129,8 @@ def render_auto_inbox():
                 if started:
                     if "completion_batch" in st.session_state:
                         del st.session_state["completion_batch"]
+                    st.session_state["pipeline_scroll_to_banner_nonce"] = st.session_state.get("pipeline_scroll_to_banner_nonce", 0) + 1
+                    st.toast("🚀 Evaluation pipeline started! Scrolling to live progress...", icon="⚡")
                     st.rerun()
             
     else:
@@ -199,7 +169,16 @@ def render_auto_inbox():
                     3. **Firefox Browsers (Firefox, Zen, LibreWolf, Waterfox):**
                        - Open `about:debugging#/runtime/this-firefox`.
                        - Click **Load Temporary Add-on...** and select `manifest.json` inside the `skippy-extension` folder.
-                    4. **Capture Postings:** Navigate to LinkedIn, click any job listing, right-click anywhere on the details pane, and select **⚡ Send Listing to Skippy**.
+                    4. **Authorize the Extension (One Time):** Click the **Skippy Job Catcher** icon in your browser toolbar, paste the **Extension Auth Token** shown below, and click **Save Token**.
+                    5. **Capture Postings:** Navigate to LinkedIn, click any job listing, right-click anywhere on the details pane, and select **⚡ Send Listing to Skippy**.
                     """)
+
+    with st.expander("🔑 Extension Auth Token (Required by Skippy Job Catcher v1.4+)", expanded=not bool(pending_jobs)):
+        st.caption(
+            "Copy this local token and paste it into the **Skippy Job Catcher** extension popup in your browser toolbar. "
+            "This prevents other local scripts or untrusted extensions from writing to your inbox."
+        )
+        webhook_token = get_or_create_webhook_token()
+        st.code(webhook_token, language=None)
 
 render_auto_inbox()
