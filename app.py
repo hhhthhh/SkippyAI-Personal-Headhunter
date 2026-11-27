@@ -56,6 +56,10 @@ if not authenticated:
 
 sync_session_cookie()
 
+pending_page = st.session_state.pop("_pending_switch_page", None)
+if pending_page:
+    st.switch_page(pending_page)
+
 # 4. Spin up the background webhook listener for the browser extension
 @st.cache_resource
 def init_webhook():

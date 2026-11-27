@@ -10,6 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 from utils import (
     check_and_handle_pipeline_completion,
+    navigate_to_page,
     render_completion_card,
     render_resume_selector,
     combine_selected_resumes,
@@ -34,7 +35,7 @@ with col_desc:
     )
 with col_back:
     if st.button("⬅️ Back to Job Search", width="stretch"):
-        st.switch_page("pages/1_scraper.py")
+        navigate_to_page("pages/1_scraper.py")
 render_resume_selector(key_suffix="linkedin_page", in_sidebar=False)
 st.markdown("---")
 

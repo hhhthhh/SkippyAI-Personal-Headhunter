@@ -716,14 +716,222 @@ def render_ats_resume_downloads(
                 )
 
 
+def navigate_to_page(page_path: str) -> None:
+    """Defers page switching to the next full-app rerun in app.py.
+
+    Calling st.switch_page while a @st.fragment(run_every=...) timer is active can
+    race with a stale auto-rerun carrying the previous page_script_hash, causing
+    Streamlit's frontend to wipe the destination page blank. A full-app rerun first
+    clears browser auto-rerun intervals before app.py calls st.switch_page.
+    """
+    st.session_state["_pending_switch_page"] = page_path
+    st.rerun()
+
+
 @st.fragment(run_every="2s")
+def _render_running_top_pipeline_banner():
+    """Polls active background evaluation progress every 2 seconds."""
+    if check_and_handle_pipeline_completion():
+        return
+    status = pipeline_manager.get_status()
+    if not status.get("is_running"):
+        st.rerun()
+        return
+
+    st.html("<div id='global_pipeline_top_banner' style='scroll-margin-top: 100px;'></div>")
+    is_stopping = status.get("is_stopping", False)
+    total = max(status.get("total", 1), 1)
+    completed = status.get("completed", 0)
+    remaining = max(total - completed, 0)
+    prog = min(completed / total, 1.0)
+    cur = status.get("current_job", "Initializing...")
+    source = status.get("source", "Job Evaluation")
+
+    with st.container(border=True):
+        st.markdown(
+            f"""
+            <style>
+            @keyframes skippy-spin {{
+                0% {{ transform: rotate(0deg); }}
+                100% {{ transform: rotate(360deg); }}
+            }}
+            @keyframes skippy-pulse-ring {{
+                0% {{ box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.6); }}
+                70% {{ box-shadow: 0 0 0 10px rgba(147, 51, 234, 0); }}
+                100% {{ box-shadow: 0 0 0 0 rgba(147, 51, 234, 0); }}
+            }}
+            .skippy-pipeline-banner {{
+                background: linear-gradient(135deg, rgba(147, 51, 234, 0.12) 0%, rgba(59, 130, 246, 0.12) 100%);
+                border-radius: 8px;
+                padding: 14px 18px;
+                border: 1px solid rgba(147, 51, 234, 0.35);
+                margin-bottom: 12px;
+            }}
+            .skippy-banner-spinner {{
+                width: 34px;
+                height: 34px;
+                border: 3.5px solid rgba(147, 51, 234, 0.2);
+                border-top: 3.5px solid #9333ea;
+                border-radius: 50%;
+                animation: skippy-spin 0.8s linear infinite;
+                flex-shrink: 0;
+            }}
+            .skippy-inline-spinner {{
+                width: 15px;
+                height: 15px;
+                border: 2px solid rgba(147, 51, 234, 0.2);
+                border-top: 2px solid #9333ea;
+                border-radius: 50%;
+                animation: skippy-spin 0.8s linear infinite;
+                flex-shrink: 0;
+                display: inline-block;
+            }}
+            .skippy-live-pill {{
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                background: {'rgba(239, 68, 68, 0.2)' if is_stopping else 'rgba(16, 185, 129, 0.2)'};
+                color: {'#ef4444' if is_stopping else '#10b981'};
+                border: 1px solid {'rgba(239, 68, 68, 0.4)' if is_stopping else 'rgba(16, 185, 129, 0.4)'};
+                padding: 3px 10px;
+                border-radius: 9999px;
+                font-size: 0.75rem;
+                font-weight: 700;
+                letter-spacing: 0.05em;
+            }}
+            .skippy-live-dot {{
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                background: {'#ef4444' if is_stopping else '#10b981'};
+                animation: skippy-pulse-ring 1.5s infinite;
+            }}
+            </style>
+            <div class="skippy-pipeline-banner">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <div style="display:flex; align-items:center; gap:14px;">
+                        {f'''<span style="font-size:1.8rem; line-height:1;">🛑</span>''' if is_stopping else f'''<div style="position:relative; width:34px; height:34px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><div class="skippy-banner-spinner" style="position:absolute; width:100%; height:100%; box-sizing:border-box;"></div><span style="font-size:1.1rem; line-height:1;">⚡</span></div>'''}
+                        <div>
+                            <h3 style="margin:0; font-size:1.2rem; font-weight:700; letter-spacing:-0.01em;">
+                                {'Halting Evaluation Pipeline...' if is_stopping else 'AI Job Evaluation Pipeline In Progress'}
+                            </h3>
+                            <p style="margin:2px 0 0 0; font-size:0.86rem; opacity:0.85;">
+                                {'Wrapping up active analysis and safely committing progress...' if is_stopping else 'Skippy is scoring postings in the background with 4-pillar rubrics, eligibility compliance, and gap analysis.'}
+                            </p>
+                        </div>
+                    </div>
+                    <div class="skippy-live-pill">
+                        <span class="skippy-live-dot"></span>
+                        <span>{'STOPPING' if is_stopping else 'LIVE PIPELINE'}</span>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Key live metrics
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Evaluated", f"{completed} / {total}")
+        c2.metric("Progress", f"{int(prog * 100)}%")
+        c3.metric("Remaining", f"{remaining}")
+        c4.metric("Source", source)
+
+        st.progress(prog, text=f"Evaluating role {min(completed + 1, total)} of {total} ({int(prog * 100)}% complete)...")
+
+        escaped_cur = html.escape(cur)
+        st.markdown(
+            f"""
+            <div style="
+                padding: 8px 12px;
+                background: rgba(128, 128, 128, 0.08);
+                border-left: 3px solid rgba(147, 51, 234, 0.8);
+                border-radius: 4px;
+                margin: 8px 0 12px 0;
+                font-size: 0.88rem;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex-wrap: wrap;
+            ">
+                {f'<span style="font-size:1rem;">🛑</span>' if is_stopping else '<div class="skippy-inline-spinner"></div>'}
+                <span style="font-weight:600; color:rgba(147, 51, 234, 1.0);">Currently Evaluating:</span>
+                <span style="font-family: monospace; font-size: 0.85rem;">{escaped_cur}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        btn_col1, btn_col2, _ = st.columns([2.5, 3.5, 4.0], vertical_alignment="center")
+        with btn_col1:
+            if is_stopping:
+                st.button("🛑 Stopping...", key="btn_stop_top_banner_disabled", disabled=True, width="stretch")
+            else:
+                if st.button("🛑 Stop Review", key="btn_stop_top_banner", type="secondary", width="stretch"):
+                    pipeline_manager.cancel()
+                    st.rerun()
+        with btn_col2:
+            if st.button("📁 View Completed in Evaluations ➔", key="btn_view_running_banner_hist", type="primary", width="stretch"):
+                st.session_state["active_history_source"] = source
+                navigate_to_page("pages/2_history.py")
+
+    st.markdown("---")
+
+    # Smooth auto-scroll to the top banner when a review is started
+    current_scroll_nonce = st.session_state.get("pipeline_scroll_to_banner_nonce", 0)
+    last_scrolled_nonce = st.session_state.get("_last_pipeline_scroll_nonce", -1)
+
+    if current_scroll_nonce > 0 and current_scroll_nonce != last_scrolled_nonce:
+        st.session_state["_last_pipeline_scroll_nonce"] = current_scroll_nonce
+        st.iframe(
+            f"""<!DOCTYPE html>
+            <html>
+            <head>
+            <style>html, body {{ margin: 0; padding: 0; border: none; overflow: hidden; background: transparent; }}</style>
+            </head>
+            <body>
+            <script>
+            (function() {{
+                let attempts = 0;
+                const maxAttempts = 60;
+                const interval = setInterval(function() {{
+                    attempts++;
+                    try {{
+                        const doc = window.parent ? window.parent.document : document;
+                        const target = doc.getElementById('global_pipeline_top_banner');
+                        if (target) {{
+                            clearInterval(interval);
+                            target.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                        }} else {{
+                            const main = doc.querySelector('.stMain') || doc.querySelector('[data-testid=\"stMain\"]') || (window.parent || window);
+                            if (main && typeof main.scrollTo === 'function') {{
+                                main.scrollTo({{ top: 0, behavior: 'smooth' }});
+                            }}
+                            if (attempts >= maxAttempts) clearInterval(interval);
+                        }}
+                    }} catch (e) {{
+                        if (attempts >= maxAttempts) clearInterval(interval);
+                    }}
+                }}, 30);
+            }})();
+            </script>
+            <!-- nonce: {current_scroll_nonce} -->
+            </body>
+            </html>""",
+            height=1,
+        )
+
+
 def render_global_top_pipeline_banner():
     """
     Renders a prominent, full-width screen-wide banner notification
     across all app pages whenever background job evaluations are underway,
-    or upon completion with a one-click navigation jump to Job History.
+    or upon completion with a one-click navigation jump to Evaluations.
+
+    Only mounts a 2-second polling fragment while a pipeline is actively running.
     """
-    check_and_handle_pipeline_completion()
+    if check_and_handle_pipeline_completion():
+        return
     status = pipeline_manager.get_status()
     is_running = bool(status.get("is_running"))
     was_running = bool(st.session_state.get("_last_observed_pipeline_running", False))
@@ -733,189 +941,7 @@ def render_global_top_pipeline_banner():
         st.session_state["pipeline_scroll_to_banner_nonce"] = st.session_state.get("pipeline_scroll_to_banner_nonce", 0) + 1
 
     if is_running:
-        st.html("<div id='global_pipeline_top_banner' style='scroll-margin-top: 100px;'></div>")
-        is_stopping = status.get("is_stopping", False)
-        total = max(status.get("total", 1), 1)
-        completed = status.get("completed", 0)
-        remaining = max(total - completed, 0)
-        prog = min(completed / total, 1.0)
-        cur = status.get("current_job", "Initializing...")
-        source = status.get("source", "Job Evaluation")
-
-        with st.container(border=True):
-            st.markdown(
-                f"""
-                <style>
-                @keyframes skippy-spin {{
-                    0% {{ transform: rotate(0deg); }}
-                    100% {{ transform: rotate(360deg); }}
-                }}
-                @keyframes skippy-pulse-ring {{
-                    0% {{ box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.6); }}
-                    70% {{ box-shadow: 0 0 0 10px rgba(147, 51, 234, 0); }}
-                    100% {{ box-shadow: 0 0 0 0 rgba(147, 51, 234, 0); }}
-                }}
-                .skippy-pipeline-banner {{
-                    background: linear-gradient(135deg, rgba(147, 51, 234, 0.12) 0%, rgba(59, 130, 246, 0.12) 100%);
-                    border-radius: 8px;
-                    padding: 14px 18px;
-                    border: 1px solid rgba(147, 51, 234, 0.35);
-                    margin-bottom: 12px;
-                }}
-                .skippy-banner-spinner {{
-                    width: 34px;
-                    height: 34px;
-                    border: 3.5px solid rgba(147, 51, 234, 0.2);
-                    border-top: 3.5px solid #9333ea;
-                    border-radius: 50%;
-                    animation: skippy-spin 0.8s linear infinite;
-                    flex-shrink: 0;
-                }}
-                .skippy-inline-spinner {{
-                    width: 15px;
-                    height: 15px;
-                    border: 2px solid rgba(147, 51, 234, 0.2);
-                    border-top: 2px solid #9333ea;
-                    border-radius: 50%;
-                    animation: skippy-spin 0.8s linear infinite;
-                    flex-shrink: 0;
-                    display: inline-block;
-                }}
-                .skippy-live-pill {{
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 6px;
-                    background: {'rgba(239, 68, 68, 0.2)' if is_stopping else 'rgba(16, 185, 129, 0.2)'};
-                    color: {'#ef4444' if is_stopping else '#10b981'};
-                    border: 1px solid {'rgba(239, 68, 68, 0.4)' if is_stopping else 'rgba(16, 185, 129, 0.4)'};
-                    padding: 3px 10px;
-                    border-radius: 9999px;
-                    font-size: 0.75rem;
-                    font-weight: 700;
-                    letter-spacing: 0.05em;
-                }}
-                .skippy-live-dot {{
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 50%;
-                    background: {'#ef4444' if is_stopping else '#10b981'};
-                    animation: skippy-pulse-ring 1.5s infinite;
-                }}
-                </style>
-                <div class="skippy-pipeline-banner">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                        <div style="display:flex; align-items:center; gap:14px;">
-                            {f'''<span style="font-size:1.8rem; line-height:1;">🛑</span>''' if is_stopping else f'''<div style="position:relative; width:34px; height:34px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><div class="skippy-banner-spinner" style="position:absolute; width:100%; height:100%; box-sizing:border-box;"></div><span style="font-size:1.1rem; line-height:1;">⚡</span></div>'''}
-                            <div>
-                                <h3 style="margin:0; font-size:1.2rem; font-weight:700; letter-spacing:-0.01em;">
-                                    {'Halting Evaluation Pipeline...' if is_stopping else 'AI Job Evaluation Pipeline In Progress'}
-                                </h3>
-                                <p style="margin:2px 0 0 0; font-size:0.86rem; opacity:0.85;">
-                                    {'Wrapping up active analysis and safely committing progress...' if is_stopping else 'Skippy is scoring postings in the background with 4-pillar rubrics, eligibility compliance, and gap analysis.'}
-                                </p>
-                            </div>
-                        </div>
-                        <div class="skippy-live-pill">
-                            <span class="skippy-live-dot"></span>
-                            <span>{'STOPPING' if is_stopping else 'LIVE PIPELINE'}</span>
-                        </div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            # Key live metrics
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Evaluated", f"{completed} / {total}")
-            c2.metric("Progress", f"{int(prog * 100)}%")
-            c3.metric("Remaining", f"{remaining}")
-            c4.metric("Source", source)
-
-            st.progress(prog, text=f"Evaluating role {min(completed + 1, total)} of {total} ({int(prog * 100)}% complete)...")
-
-            escaped_cur = html.escape(cur)
-            st.markdown(
-                f"""
-                <div style="
-                    padding: 8px 12px;
-                    background: rgba(128, 128, 128, 0.08);
-                    border-left: 3px solid rgba(147, 51, 234, 0.8);
-                    border-radius: 4px;
-                    margin: 8px 0 12px 0;
-                    font-size: 0.88rem;
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    flex-wrap: wrap;
-                ">
-                    {f'<span style="font-size:1rem;">🛑</span>' if is_stopping else '<div class="skippy-inline-spinner"></div>'}
-                    <span style="font-weight:600; color:rgba(147, 51, 234, 1.0);">Currently Evaluating:</span>
-                    <span style="font-family: monospace; font-size: 0.85rem;">{escaped_cur}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            btn_col1, btn_col2, _ = st.columns([2.5, 3.5, 4.0], vertical_alignment="center")
-            with btn_col1:
-                if is_stopping:
-                    st.button("🛑 Stopping...", key="btn_stop_top_banner_disabled", disabled=True, width="stretch")
-                else:
-                    if st.button("🛑 Stop Review", key="btn_stop_top_banner", type="secondary", width="stretch"):
-                        pipeline_manager.cancel()
-                        st.rerun()
-            with btn_col2:
-                if st.button("📁 View Completed in Evaluations ➔", key="btn_view_top_banner_hist", type="primary", width="stretch"):
-                    st.session_state["active_history_source"] = source
-                    st.switch_page("pages/2_history.py")
-
-        st.markdown("---")
-
-        # Smooth auto-scroll to the top banner when a review is started
-        current_scroll_nonce = st.session_state.get("pipeline_scroll_to_banner_nonce", 0)
-        last_scrolled_nonce = st.session_state.get("_last_pipeline_scroll_nonce", -1)
-
-        if current_scroll_nonce > 0 and current_scroll_nonce != last_scrolled_nonce:
-            st.session_state["_last_pipeline_scroll_nonce"] = current_scroll_nonce
-            st.iframe(
-                f"""<!DOCTYPE html>
-                <html>
-                <head>
-                <style>html, body {{ margin: 0; padding: 0; border: none; overflow: hidden; background: transparent; }}</style>
-                </head>
-                <body>
-                <script>
-                (function() {{
-                    let attempts = 0;
-                    const maxAttempts = 60;
-                    const interval = setInterval(function() {{
-                        attempts++;
-                        try {{
-                            const doc = window.parent ? window.parent.document : document;
-                            const target = doc.getElementById('global_pipeline_top_banner');
-                            if (target) {{
-                                clearInterval(interval);
-                                target.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
-                            }} else {{
-                                const main = doc.querySelector('.stMain') || doc.querySelector('[data-testid=\"stMain\"]') || (window.parent || window);
-                                if (main && typeof main.scrollTo === 'function') {{
-                                    main.scrollTo({{ top: 0, behavior: 'smooth' }});
-                                }}
-                                if (attempts >= maxAttempts) clearInterval(interval);
-                            }}
-                        }} catch (e) {{
-                            if (attempts >= maxAttempts) clearInterval(interval);
-                        }}
-                    }}, 30);
-                }})();
-                </script>
-                <!-- nonce: {current_scroll_nonce} -->
-                </body>
-                </html>""",
-                height=1,
-            )
-
+        _render_running_top_pipeline_banner()
     elif "completion_batch" in st.session_state and st.session_state["completion_batch"].get("jobs"):
         batch = st.session_state["completion_batch"]
         jobs = batch.get("jobs", [])
@@ -953,14 +979,14 @@ def render_global_top_pipeline_banner():
 
             col_view, col_dismiss, _ = st.columns([3.5, 2.0, 4.5], vertical_alignment="center")
             with col_view:
-                if st.button("📁 View in Evaluations ➔", key="btn_view_top_banner_hist", type="primary", width="stretch"):
+                if st.button("📁 View in Evaluations ➔", key="btn_view_done_banner_hist", type="primary", width="stretch"):
                     st.session_state["active_history_source"] = src
-                    del st.session_state["completion_batch"]
+                    st.session_state.pop("completion_batch", None)
                     pipeline_manager.dismiss_latest_run()
-                    st.switch_page("pages/2_history.py")
+                    navigate_to_page("pages/2_history.py")
             with col_dismiss:
                 if st.button("Dismiss", key="btn_dismiss_top_banner", width="stretch"):
-                    del st.session_state["completion_batch"]
+                    st.session_state.pop("completion_batch", None)
                     pipeline_manager.dismiss_latest_run()
                     st.rerun()
 
@@ -968,27 +994,40 @@ def render_global_top_pipeline_banner():
 
 
 @st.fragment(run_every="2s")
+def _render_running_pipeline_sidebar_status():
+    """Polls active background pipeline status in the sidebar every 2 seconds."""
+    if check_and_handle_pipeline_completion():
+        return
+    status = pipeline_manager.get_status()
+    if not status.get("is_running"):
+        st.rerun()
+        return
+
+    with st.container(border=True):
+        if status.get("is_stopping"):
+            st.caption("🛑 **Halting Pipeline...**")
+            st.button("Stopping...", key="btn_cancel_global_pipeline_disabled", width="stretch", disabled=True)
+        else:
+            total = max(status.get("total", 1), 1)
+            completed = status.get("completed", 0)
+            prog = min(completed / total, 1.0)
+            st.markdown(f"⚡ **Pipeline:** {completed}/{total} Jobs")
+            st.progress(prog)
+            if st.button("🛑 Stop Review", key="btn_cancel_global_pipeline", width="stretch"):
+                pipeline_manager.cancel()
+                st.rerun()
+
+
 def render_global_pipeline_status():
-    check_and_handle_pipeline_completion()
+    if check_and_handle_pipeline_completion():
+        return
     status = pipeline_manager.get_status()
 
-    # If pipeline is running, render a concise live card in the sidebar
+    # If pipeline is running, mount a 2-second polling card in the sidebar
     if status.get("is_running"):
-        with st.container(border=True):
-            if status.get("is_stopping"):
-                st.caption("🛑 **Halting Pipeline...**")
-                st.button("Stopping...", key="btn_cancel_global_pipeline_disabled", width="stretch", disabled=True)
-            else:
-                total = max(status.get("total", 1), 1)
-                completed = status.get("completed", 0)
-                prog = min(completed / total, 1.0)
-                st.markdown(f"⚡ **Pipeline:** {completed}/{total} Jobs")
-                st.progress(prog)
-                if st.button("🛑 Stop Review", key="btn_cancel_global_pipeline", width="stretch"):
-                    pipeline_manager.cancel()
-                    st.rerun()
+        _render_running_pipeline_sidebar_status()
 
-    # If a completion batch exists, show a quick action card in the sidebar
+    # If a completion batch exists, show a static quick action card in the sidebar (no polling)
     elif "completion_batch" in st.session_state and st.session_state["completion_batch"].get("jobs"):
         batch = st.session_state["completion_batch"]
         count = len(batch.get("jobs", []))
@@ -999,10 +1038,12 @@ def render_global_pipeline_status():
             with col1:
                 if st.button("📁 Evaluations", key="sb_view_hist", width="stretch"):
                     st.session_state["active_history_source"] = src
-                    st.switch_page("pages/2_history.py")
+                    st.session_state.pop("completion_batch", None)
+                    pipeline_manager.dismiss_latest_run()
+                    navigate_to_page("pages/2_history.py")
             with col2:
                 if st.button("Dismiss", key="sb_dismiss_batch", width="stretch"):
-                    del st.session_state["completion_batch"]
+                    st.session_state.pop("completion_batch", None)
                     pipeline_manager.dismiss_latest_run()
                     st.rerun()
 
@@ -1730,11 +1771,11 @@ def render_completion_card(batch_jobs: list[dict], source_label: str = "Scraper"
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
                 }
                 st.session_state["active_history_source"] = source_label
-                if "completion_batch" in st.session_state:
-                    del st.session_state["completion_batch"]
-                st.switch_page("pages/2_history.py")
+                st.session_state.pop("completion_batch", None)
+                pipeline_manager.dismiss_latest_run()
+                navigate_to_page("pages/2_history.py")
         with col_btn2:
             if st.button("➕ Review More Jobs", width="stretch", key=f"eval_more_{source_label}"):
-                if "completion_batch" in st.session_state:
-                    del st.session_state["completion_batch"]
+                st.session_state.pop("completion_batch", None)
+                pipeline_manager.dismiss_latest_run()
                 st.rerun()
