@@ -9,6 +9,7 @@ import career_compass
 from utils import (
     get_active_prompt_details,
     set_active_prompt_mode,
+    navigate_to_page,
     PROMPT_MODE_COMPASS,
 )
 
@@ -150,9 +151,14 @@ if profile:
     r_col, l_col = st.columns([2.2, 1.8])
     with r_col:
         st.markdown("#### 📊 Industry Alignment Chart")
-        radar_fig = career_compass.render_alignment_radar_chart(scores)
-        if radar_fig:
-            st.plotly_chart(radar_fig, width="stretch")
+        radar_spec = career_compass.render_alignment_radar_chart(scores)
+        if radar_spec:
+            st.echarts_chart(
+                radar_spec,
+                height=340,
+                width="stretch",
+                alt="Career domain alignment radar chart",
+            )
         else:
             st.info("No score distribution to display.")
 
@@ -361,7 +367,7 @@ if profile:
             with col:
                 if st.button(f"{role}", key=f"btn_search_role_{idx}", width="stretch"):
                     st.session_state["li_search_query"] = role
-                    st.switch_page("pages/1_scraper.py")
+                    navigate_to_page("pages/1_scraper.py")
 
     st.markdown("---")
 

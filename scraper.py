@@ -68,11 +68,46 @@ def _http_get(url: str, **kwargs) -> requests.Response:
     return _get_http_session().get(url, **kwargs)
 
 
+def _read_bounded_text(resp: requests.Response, max_bytes: int = MAX_RESPONSE_BYTES) -> str:
+    """Reads at most `max_bytes` from a streamed HTTP response to prevent unbounded memory growth."""
+    try:
+        iter_fn = getattr(resp, "iter_content", None)
+        if callable(iter_fn):
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in iter_fn(chunk_size=65536):
+                if not chunk:
+                    continue
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8", errors="replace")
+                remaining = max_bytes - total
+                if remaining <= 0:
+                    break
+                if len(chunk) > remaining:
+                    chunks.append(chunk[:remaining])
+                    total += remaining
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            if chunks:
+                encoding = getattr(resp, "encoding", None) or "utf-8"
+                return b"".join(chunks).decode(encoding, errors="replace")
+        raw_text = getattr(resp, "text", "") or ""
+        return raw_text[:max_bytes]
+    finally:
+        close_fn = getattr(resp, "close", None)
+        if callable(close_fn):
+            try:
+                close_fn()
+            except Exception:
+                pass
+
+
 def is_safe_url(url: str, allow_unresolved: bool = True) -> bool:
     """
     Validates that a URL is a safe public HTTP or HTTPS URL.
-    Blocks SSRF targets including loopback, local network, link-local (cloud metadata),
-    and non-HTTP schemes (file://, javascript:, data:, etc.).
+    Blocks SSRF targets including loopback, local network, CGNAT/Tailscale,
+    link-local (cloud metadata), and non-HTTP schemes (file://, javascript:, data:, etc.).
     """
     if not url or not isinstance(url, str):
         return False
@@ -102,18 +137,22 @@ def is_safe_url(url: str, allow_unresolved: bool = True) -> bool:
         # Check if the hostname is a direct IP address
         try:
             ip = ipaddress.ip_address(hostname_lower)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            if getattr(ip, "ipv4_mapped", None) is not None:
+                ip = ip.ipv4_mapped
+            if not ip.is_global or ip.is_multicast:
                 return False
             return True
         except ValueError:
             pass
             
-        # For domain names, resolve to IP addresses and ensure none point to internal/metadata IPs
+        # For domain names, resolve to IP addresses and ensure all are globally routable
         try:
             addr_info = socket.getaddrinfo(hostname, None)
             for item in addr_info:
                 ip = ipaddress.ip_address(item[4][0])
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                if getattr(ip, "ipv4_mapped", None) is not None:
+                    ip = ip.ipv4_mapped
+                if not ip.is_global or ip.is_multicast:
                     return False
         except (socket.gaierror, socket.herror, OSError):
             # If DNS lookup is unavailable (e.g. offline sandbox), permit domains with a valid structure
@@ -136,19 +175,23 @@ def _linkedin_guest_fetch(url: str, max_retries: int = 4) -> str:
     }
     delay = 0.5
     for attempt in range(max_retries + 1):
-        resp = _http_get(url, headers=headers, timeout=15)
+        resp = _http_get(url, headers=headers, timeout=15, stream=True)
         if resp.status_code == 404:
+            if callable(getattr(resp, "close", None)):
+                resp.close()
             return ""
         if resp.status_code == 429 or resp.status_code >= 500:
+            status_code = resp.status_code
+            if callable(getattr(resp, "close", None)):
+                resp.close()
             if attempt == max_retries:
-                raise RuntimeError(f"LinkedIn guest endpoint rate-limited or unavailable (HTTP {resp.status_code}).")
+                raise RuntimeError(f"LinkedIn guest endpoint rate-limited or unavailable (HTTP {status_code}).")
             jitter = random.uniform(0.0, 0.4)
             time.sleep(delay + jitter)
             delay = min(delay * 2, 6.0)
             continue
         resp.raise_for_status()
-        text = resp.text or ""
-        return text[:MAX_RESPONSE_BYTES]
+        return _read_bounded_text(resp, MAX_RESPONSE_BYTES)
     return ""
 
 
@@ -694,31 +737,38 @@ def scrape_job_with_guard(url: str, page: Page = None) -> Tuple[str, List[str]]:
         for _hop in range(6):
             if not is_safe_url(current_target):
                 return f"Error: URL redirected to a disallowed address: {current_target}", []
-            resp = _http_get(current_target, headers=headers, timeout=8, allow_redirects=False)
+            resp = _http_get(current_target, headers=headers, timeout=8, allow_redirects=False, stream=True)
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
-                current_target = urljoin(current_target, resp.headers["Location"])
+                next_target = urljoin(current_target, resp.headers["Location"])
+                if callable(getattr(resp, "close", None)):
+                    resp.close()
+                current_target = next_target
                 continue
             response = resp
             break
 
         if response is not None:
-            # Also validate any history/final URL if underlying transport followed redirects
-            for hist_resp in getattr(response, "history", []) or []:
-                hist_url = getattr(hist_resp, "url", "")
-                if hist_url and not is_safe_url(hist_url):
-                    return f"Error: URL redirected through a disallowed address: {hist_url}", []
-            if getattr(response, "url", "") and not is_safe_url(response.url):
-                return f"Error: URL redirected to a disallowed address: {response.url}", []
+            try:
+                # Also validate any history/final URL if underlying transport followed redirects
+                for hist_resp in getattr(response, "history", []) or []:
+                    hist_url = getattr(hist_resp, "url", "")
+                    if hist_url and not is_safe_url(hist_url):
+                        return f"Error: URL redirected through a disallowed address: {hist_url}", []
+                if getattr(response, "url", "") and not is_safe_url(response.url):
+                    return f"Error: URL redirected to a disallowed address: {response.url}", []
 
-            content_type = (getattr(response, "headers", {}) or {}).get("Content-Type", "").lower()
-            if any(content_type.startswith(prefix) for prefix in _BLOCKED_CONTENT_PREFIXES):
-                return f"Error: Unsupported binary Content-Type ({content_type}).", []
+                content_type = (getattr(response, "headers", {}) or {}).get("Content-Type", "").lower()
+                if any(content_type.startswith(prefix) for prefix in _BLOCKED_CONTENT_PREFIXES):
+                    return f"Error: Unsupported binary Content-Type ({content_type}).", []
 
-            if response.status_code == 200:
-                raw_body = (response.text or "")[:MAX_RESPONSE_BYTES]
-                cleaned_text, sec_flags = _extract_guarded_text_from_html(raw_body)
-                if len(cleaned_text) > 300:
-                    return cleaned_text, sec_flags
+                if response.status_code == 200:
+                    raw_body = _read_bounded_text(response, MAX_RESPONSE_BYTES)
+                    cleaned_text, sec_flags = _extract_guarded_text_from_html(raw_body)
+                    if len(cleaned_text) > 300:
+                        return cleaned_text, sec_flags
+            finally:
+                if callable(getattr(response, "close", None)):
+                    response.close()
     except Exception:
         pass
 

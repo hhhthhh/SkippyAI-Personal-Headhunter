@@ -518,7 +518,11 @@ def login_user(username: str) -> str:
     token = secrets.token_urlsafe(32)
     now = time.time()
     clean_user = username.strip()
+    timeout_secs = _get_session_timeout_seconds()
     with _auth_lock:
+        expired = [k for k, info in _active_sessions.items() if (now - info.get("last_seen", 0)) > timeout_secs]
+        for k in expired:
+            del _active_sessions[k]
         _active_sessions[token] = {
             "username": clean_user,
             "created_at": now,

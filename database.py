@@ -5,9 +5,19 @@ import re
 import time
 from datetime import datetime
 from functools import lru_cache
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode
 
 _LINKEDIN_HOST_RE = re.compile(r"(^|\.)linkedin\.com$", re.I)
+_JOB_ID_QUERY_PARAMS = frozenset({
+    "gh_jid",
+    "jobid",
+    "job_id",
+    "reqid",
+    "req_id",
+    "jid",
+    "posting",
+    "currentjobid",
+})
 
 DB_FILE = "skippy.db"
 DB_PATH = "skippy.db"
@@ -323,18 +333,38 @@ SUMMARY_COLUMNS = (
     ) + ' THEN 1 ELSE 0 END AS "_has_docs"'
 )
 
-def load_job_detail(url: str) -> dict:
-    """Loads the full row (documents and Job Text included) for a single job URL."""
+def load_job_details(urls: list[str]) -> dict[str, dict]:
+    """Loads full job rows (including documents and Job Text) for a batch of URLs in one DB connection."""
+    clean_urls = list(dict.fromkeys((u or "").strip() for u in (urls or []) if (u or "").strip()))
+    if not clean_urls:
+        return {}
     conn = get_connection()
+    results: dict[str, dict] = {}
     try:
         conn.row_factory = sqlite3.Row
-        row = conn.execute('SELECT * FROM jobs WHERE "URL" = ?', ((url or "").strip(),)).fetchone()
-        return {k: ("" if v is None else v) for k, v in dict(row).items()} if row else {}
+        chunk_size = 500
+        for i in range(0, len(clean_urls), chunk_size):
+            chunk = clean_urls[i:i + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(f'SELECT * FROM jobs WHERE "URL" IN ({placeholders})', tuple(chunk)).fetchall()
+            for row in rows:
+                d = {k: ("" if v is None else v) for k, v in dict(row).items()}
+                if d.get("URL"):
+                    results[d["URL"]] = d
+        return results
     except Exception as e:
-        print(f"[Database Error] Job detail load failed: {e}")
-        return {}
+        print(f"[Database Error] Batch job detail load failed: {e}")
+        return results
     finally:
         conn.close()
+
+
+def load_job_detail(url: str) -> dict:
+    """Loads the full row (documents and Job Text included) for a single job URL."""
+    clean = (url or "").strip()
+    if not clean:
+        return {}
+    return load_job_details([clean]).get(clean, {})
 
 
 def load_all_jobs(summary_only: bool = False):
@@ -659,14 +689,25 @@ def extract_linkedin_job_id(input_str: any) -> str | None:
 
 
 def normalize_job_url(url: any) -> str:
-    """Normalizes job URL by stripping query parameters and trailing slashes for robust matching."""
+    """Normalizes a job URL by stripping tracking params and trailing slashes while preserving job-ID query params."""
     if not url or not isinstance(url, str):
         return ""
     clean = url.strip()
     if not clean:
         return ""
-    clean = clean.split("?")[0].split("#")[0].rstrip("/")
-    return clean.lower()
+    base, _, rest = clean.partition("?")
+    base = base.split("#")[0].rstrip("/").lower()
+    if not rest:
+        return base
+    query_part = rest.split("#")[0]
+    kept = sorted(
+        (k.lower(), v.strip())
+        for k, v in parse_qsl(query_part, keep_blank_values=False)
+        if k.lower() in _JOB_ID_QUERY_PARAMS
+        and v.strip()
+        and not base.endswith(f"/{v.strip().lower()}")
+    )
+    return f"{base}?{urlencode(kept)}" if kept else base
 
 
 def load_evaluated_job_identifiers() -> tuple[set, set]:
@@ -767,17 +808,6 @@ def record_seen_postings(postings: list[dict]) -> bool:
     finally:
         if conn is not None:
             conn.close()
-
-
-def clear_seen_postings() -> None:
-    """Clears all records from `seen_postings`."""
-    conn = get_connection()
-    try:
-        with conn:
-            conn.execute("DELETE FROM seen_postings")
-        clear_repost_cache()
-    finally:
-        conn.close()
 
 
 def classify_posting(
@@ -915,20 +945,6 @@ def load_scraper_results() -> list[dict]:
         conn.close()
 
 
-def get_seen_postings_count() -> int:
-    """Returns the total number of distinct postings recorded in `seen_postings`."""
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute('SELECT COUNT(*) FROM seen_postings')
-        row = cur.fetchone()
-        return row[0] if row else 0
-    except Exception:
-        return 0
-    finally:
-        conn.close()
-
-
 def clear_scraper_results(source: str | None = None) -> None:
     """Wipes the active scraper results queue from `scraper_results`, optionally filtered by source."""
     conn = get_connection()
@@ -944,17 +960,48 @@ def clear_scraper_results(source: str | None = None) -> None:
     finally:
         conn.close()
 
+def _resolve_canonical_job_url(conn: sqlite3.Connection, raw_url: str) -> str:
+    """Resolves an incoming job URL to an existing matching key (by normalized URL or LinkedIn ID) to avoid duplicate rows."""
+    clean = (raw_url or "").strip()
+    if not clean:
+        return ""
+    incoming_lid = extract_linkedin_job_id(clean)
+    incoming_norm = normalize_job_url(clean)
+
+    # Check exact match first via PRIMARY KEY index
+    cur = conn.execute('SELECT "URL" FROM jobs WHERE "URL" = ?', (clean,))
+    exact = cur.fetchone()
+    if exact:
+        return exact[0]
+
+    # Check existing rows for normalized URL or LinkedIn job ID match
+    if incoming_norm or incoming_lid:
+        for (existing_url,) in conn.execute('SELECT "URL" FROM jobs'):
+            if not existing_url:
+                continue
+            if incoming_lid and extract_linkedin_job_id(existing_url) == incoming_lid:
+                return existing_url
+            if incoming_norm and normalize_job_url(existing_url) == incoming_norm:
+                return existing_url
+
+    if incoming_lid:
+        return f"https://www.linkedin.com/jobs/view/{incoming_lid}"
+    if clean.lower().startswith(("http://", "https://")):
+        return clean.rstrip("/")
+    return clean
+
+
 def save_job_result(match_data):
     """
     Persists or updates an evaluated job posting using a non-destructive UPSERT.
-    If the URL already exists in the database, updates the evaluation scores and metadata
-    while preserving any existing generated documents ('Tailored Resume', 'Cover Letter',
-    'Interview Prep', 'Application QA', 'Followup Note', 'Reviewer Audit') and existing
-    non-default 'Application Status'.
+    If the URL already exists in the database (including query-param or trailing-slash
+    variants), updates the evaluation scores and metadata while preserving any existing
+    generated documents and non-default 'Application Status'.
     """
     conn = get_connection()
     try:
         with conn:
+            resolved_url = _resolve_canonical_job_url(conn, str(match_data.get("URL") or ""))
             conn.execute('''
                 INSERT INTO jobs (
                     "Timestamp", "Position", "Company", "Deadline", "URL",
@@ -1000,7 +1047,7 @@ def save_job_result(match_data):
                 match_data.get("Position"),
                 match_data.get("Company", ""),
                 match_data.get("Deadline", ""),
-                match_data.get("URL"),
+                resolved_url,
                 match_data.get("Eligible"),
                 match_data.get("Disqualification Reason"),
                 int(match_data.get("Score") or 0),
@@ -1032,6 +1079,7 @@ def update_job_field(url: str, field: str, value: str, max_retries: int = 3) -> 
         try:
             conn = get_connection()
             try:
+                updated = False
                 with conn:
                     if field == "Application Status":
                         now_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1050,7 +1098,9 @@ def update_job_field(url: str, field: str, value: str, max_retries: int = 3) -> 
                     else:
                         cur = conn.execute(f'UPDATE jobs SET "{field}" = ? WHERE "URL" = ?', (value, clean_url))
 
-                    if cur.rowcount == 0 and clean_url:
+                    if cur.rowcount > 0:
+                        updated = True
+                    elif clean_url:
                         # Fallback for minor URL variations (e.g. trailing slash)
                         alt_url = clean_url.rstrip("/") if clean_url.endswith("/") else clean_url + "/"
                         if field == "Application Status":
@@ -1067,13 +1117,13 @@ def update_job_field(url: str, field: str, value: str, max_retries: int = 3) -> 
                                     'UPDATE jobs SET "Application Status" = ?, "Status Updated" = ? WHERE "URL" = ?',
                                     (value, now_ts, alt_url)
                                 )
-                            if cur2.rowcount > 0:
-                                return True
+                            updated = cur2.rowcount > 0
                         else:
                             cur2 = conn.execute(f'UPDATE jobs SET "{field}" = ? WHERE "URL" = ?', (value, alt_url))
-                            if cur2.rowcount > 0:
-                                return True
-                    return cur.rowcount > 0
+                            updated = cur2.rowcount > 0
+                if updated and field in ("Application Status", "Company", "Position"):
+                    clear_repost_cache()
+                return updated
             finally:
                 conn.close()
         except sqlite3.OperationalError as e:

@@ -13,6 +13,7 @@ from utils import (
     combine_selected_resumes,
     render_active_prompt_indicator,
     initialize_core_state,
+    navigate_to_page,
     start_scraper_evaluations as process_evaluations,
 )
 import database as db
@@ -565,7 +566,7 @@ if selected_mode == "🔎 Job Board Search":
                 st.write("Prefer browsing LinkedIn directly? Use the Skippy browser extension to capture jobs into your **Extension Inbox** with a single click.")
             with col_btn:
                 if st.button("🔗 Open Extension Inbox", type="primary", width="stretch", key="btn_goto_linkedin_fallback"):
-                    st.switch_page("pages/5_linkedin.py")
+                    navigate_to_page("pages/5_linkedin.py")
 
 elif selected_mode == "📝 Paste Job Text":
     st.subheader("📝 Paste Job Text")

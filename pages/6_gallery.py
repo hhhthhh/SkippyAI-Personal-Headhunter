@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import database as db
-from utils import render_ats_resume_downloads
+from utils import render_ats_resume_downloads, navigate_to_page
 from evaluator import (
     generate_docx_from_markdown,
     render_ats_resume_html,
@@ -47,10 +47,10 @@ if not gallery_jobs:
         c1, c2, _ = st.columns([1.8, 1.8, 4])
         with c1:
             if st.button("📁 Go to Evaluations ➔", type="primary", width="stretch", key="btn_gallery_empty_goto_history"):
-                st.switch_page("pages/2_history.py")
+                navigate_to_page("pages/2_history.py")
         with c2:
             if st.button("🔍 Find & Review Jobs ➔", width="stretch", key="btn_gallery_empty_goto_search"):
-                st.switch_page("pages/1_scraper.py")
+                navigate_to_page("pages/1_scraper.py")
     st.stop()
 
 
@@ -81,7 +81,7 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
             st.session_state["active_job_url"] = url
             st.session_state["jump_to_card"] = True
             st.session_state["_hist_jump_nonce"] = st.session_state.get("_hist_jump_nonce", 0) + 1
-            st.switch_page("pages/2_history.py")
+            navigate_to_page("pages/2_history.py")
 
     cache_key = f"{doc_key}_{url}"
     editor_key = f"modal_txt_{file_prefix}_{url}"
@@ -182,8 +182,8 @@ def open_document_modal(doc_label: str, doc_content: str, file_prefix: str, doc_
             ats_style_key=ats_style_key,
             file_stem=f"ATS_Resume_{safe_title}_{safe_suffix}",
             docx_key=f"modal_dl_docx_{file_prefix}_{url}",
-            pdf_state_key=f"pdf_bytes_{file_prefix}",
-            prep_pdf_key=f"prep_pdf_{file_prefix}",
+            pdf_state_key=f"pdf_bytes_{file_prefix}_{url}",
+            prep_pdf_key=f"prep_pdf_{file_prefix}_{url}",
             pdf_dl_key=f"modal_dl_pdf_{file_prefix}_{url}",
             docx_label="📥 Download ATS Resume (.docx)",
         )
@@ -336,9 +336,11 @@ if not filtered_jobs:
 else:
     cols = st.columns(3)
     gal_limit = st.session_state.get("gal_limit", 24)
-    for index, job in enumerate(filtered_jobs[:gal_limit]):
-        # Documents are fetched per rendered card only (summary rows carry no document text)
-        job = {**job, **db.load_job_detail(job.get("URL"))}
+    visible_jobs = filtered_jobs[:gal_limit]
+    details_by_url = db.load_job_details([j.get("URL") for j in visible_jobs if j.get("URL")])
+    for index, job in enumerate(visible_jobs):
+        # Documents are fetched in one batched query for visible cards
+        job = {**job, **details_by_url.get((job.get("URL") or "").strip(), {})}
         with cols[index % 3]:
             with st.container(border=True):
                 score_val = int(job.get("Score", 0) or 0)
@@ -367,7 +369,7 @@ else:
                     st.session_state["active_job_url"] = url_val
                     st.session_state["jump_to_card"] = True
                     st.session_state["_hist_jump_nonce"] = st.session_state.get("_hist_jump_nonce", 0) + 1
-                    st.switch_page("pages/2_history.py")
+                    navigate_to_page("pages/2_history.py")
 
                 st.write("")
 

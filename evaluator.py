@@ -2,6 +2,7 @@ import os
 os.environ.setdefault("LITELLM_DISABLE_REDACT_SECRETS", "true")
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
+import hashlib
 import io
 import re
 import time
@@ -441,7 +442,7 @@ def call_unified_llm(
     if not keys:
         keys = [""]
 
-    pool_id = ",".join(keys)
+    pool_id = hashlib.sha256(",".join(keys).encode("utf-8")).hexdigest()
     start_idx = _KEY_POOL_INDEX.get(pool_id, 0) % len(keys)
 
     for attempt_idx in range(len(keys)):

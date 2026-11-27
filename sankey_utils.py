@@ -5,6 +5,7 @@ import streamlit as st
 
 import database as db
 from database import parse_date_safely
+from utils import navigate_to_page
 
 SANKEY_CARDS_PER_PAGE = 20
 
@@ -591,7 +592,7 @@ def _render_interactive_sankey_explorer(sankey_data: dict):
                         st.session_state["active_job_url"] = url
                         st.session_state["jump_to_card"] = True
                         st.session_state["_hist_jump_nonce"] = st.session_state.get("_hist_jump_nonce", 0) + 1
-                        st.switch_page("pages/2_history.py")
+                        navigate_to_page("pages/2_history.py")
             if is_advancable:
                 with r3:
                     if st.button("Heard back: Interview ➔", key=quick_adv_key, width="stretch", help="1-click advance to Interviewing"):

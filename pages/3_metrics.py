@@ -4,6 +4,7 @@ import pandas as pd
 from collections import Counter, defaultdict
 import database as db
 from evaluator import generate_upskill_roadmap, generate_docx_from_markdown
+from utils import navigate_to_page
 
 
 def split_skills_preserving_parens(raw_csv: str) -> list[str]:
@@ -557,7 +558,7 @@ if not history_data:
         c1, _ = st.columns([2.5, 4.5])
         with c1:
             if st.button("🔍 Review Jobs to Unlock Insights ➔", type="primary", width="stretch", key="btn_metrics_empty_goto_search"):
-                st.switch_page("pages/1_scraper.py")
+                navigate_to_page("pages/1_scraper.py")
 else:
     active_tab = st.session_state.pop("metrics_active_tab", None)
     if active_tab in ("🎓 Actionable Upskill Roadmap", "🎓 Personalized Learning Plan"):

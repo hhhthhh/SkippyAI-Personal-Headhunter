@@ -5,6 +5,7 @@ import streamlit as st
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import database as db
+from utils import navigate_to_page
 from sankey_utils import (
     generate_safe_job_key,
     parse_date_safely,
@@ -46,7 +47,7 @@ def render_pipeline_funnel_page():
             c1, _ = st.columns([2.5, 4.5])
             with c1:
                 if st.button("🔍 Find & Review Jobs to Start ➔", type="primary", width="stretch", key="btn_pipeline_empty_goto_search"):
-                    st.switch_page("pages/1_scraper.py")
+                    navigate_to_page("pages/1_scraper.py")
     else:
         render_sankey_section(history_data)
 

@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from utils import load_resumes, combine_selected_resumes, render_ats_resume_downloads
+from utils import load_resumes, combine_selected_resumes, render_ats_resume_downloads, navigate_to_page
 import database as db
 from evaluator import (
     tailor_resume,
@@ -174,7 +174,7 @@ if not all_saved_jobs:
         col_goto_search, _ = st.columns([2.5, 4.5])
         with col_goto_search:
             if st.button("🔍 Go to Job Search & Review a Role ➔", type="primary", width="stretch", key="btn_empty_history_goto_search"):
-                st.switch_page("pages/1_scraper.py")
+                navigate_to_page("pages/1_scraper.py")
     st.stop()
 
 
@@ -398,17 +398,359 @@ def application_status_tracker(item: dict):
     )
 
 
+def _render_document_generation_panel(
+    item: dict,
+    doc_type: str,
+    generator_func,
+    url: str,
+    job_text: str,
+    cache_key: str,
+    audit_cache_key: str,
+    audit_warn_key: str,
+    vault: dict,
+    vault_names: list[str],
+    default_doc_resumes: list[str],
+):
+    """Renders generation options and triggers AI creation + automatic fact-check audit."""
+    interview_stage = "Full Loop (All Stages)"
+    followup_type = "Post-Application Follow-Up (10-14+ Days Quiet)"
+
+    chosen_doc_resumes = default_doc_resumes
+    if len(vault_names) > 1:
+        with st.expander("📄 Resume Profile(s) to Pull Details From", expanded=False):
+            chosen_doc_resumes = st.multiselect(
+                "Select Resumes to Pull Achievements & Context From:",
+                options=vault_names,
+                default=default_doc_resumes,
+                key=f"doc_res_sel_{cache_key}",
+                help="Select 1 or more saved resumes. If you select multiple, Skippy pulls the best-matching roles, projects, skills, and bullet points across them into a single cohesive document.",
+            ) or default_doc_resumes
+    active_resume_for_gen = combine_selected_resumes(chosen_doc_resumes, vault) if chosen_doc_resumes else st.session_state.get("resume_text", "")
+
+    if doc_type == "Interview Prep":
+        interview_stage = st.selectbox(
+            "🎯 Target Interview Stage:",
+            [
+                "Full Loop (All Stages)",
+                "Phone / Recruiter Screen (30 min — Motivation, Pitch & High-Level Fit)",
+                "Technical / Subject Matter Expert (45-60 min — Deep Domain, Systems & Case Defense)",
+                "Behavioral / Final Round (Leadership, Conflict Resolution & Executive Alignment)",
+            ],
+            key=f"stage_sel_{cache_key}",
+            help="Customizes STAR stories, ways to address missing skills, and smart questions to ask for your specific interview round."
+        )
+    elif doc_type == "Followup Note":
+        followup_type = st.selectbox(
+            "📬 Follow-Up / Thank-You Scenario:",
+            [
+                "Post-Application Follow-Up (10-14+ Days Quiet)",
+                "Post-Interview Thank-You Note (Within 24 Hours)",
+                "Status Update / Value-Add Check-In",
+            ],
+            key=f"followup_sel_{cache_key}",
+            help="Generates concise 60–120 word Email + LinkedIn/Portal messages with zero banned AI clichés."
+        )
+
+    if st.button(f"⚡ Generate {doc_type}", key=f"btn_{cache_key}", type="primary"):
+        with st.spinner(f"Generating {doc_type}..."):
+            try:
+                common_args = (
+                    active_resume_for_gen,
+                    job_text,
+                    st.session_state.get("model_choice"),
+                    st.session_state.get("user_api_key"),
+                    st.session_state.get("local_base_url"),
+                    st.session_state.get("local_model_name"),
+                )
+                extra_kwargs = {
+                    "model_override": st.session_state.get("model_override", ""),
+                    "skip_guard": True,
+                }
+                if doc_type == "Interview Prep":
+                    extra_kwargs.update(
+                        missing_skills=str(item.get("Missing Skills") or ""),
+                        tailored_resume=str(item.get("Tailored Resume") or ""),
+                        cover_letter=str(item.get("Cover Letter") or ""),
+                        interview_stage=interview_stage,
+                    )
+                elif doc_type == "Followup Note":
+                    extra_kwargs["scenario"] = followup_type
+
+                content = generator_func(*common_args, **extra_kwargs)
+
+                audit_md = ""
+                if doc_type in ("Tailored Resume", "Cover Letter"):
+                    try:
+                        audit_res = review_and_refine_document(
+                            draft_text=content,
+                            master_resume=active_resume_for_gen,
+                            job_description=job_text,
+                            doc_type=doc_type,
+                            model_choice=st.session_state.get("model_choice"),
+                            api_key=st.session_state.get("user_api_key"),
+                            local_base_url=st.session_state.get("local_base_url", ""),
+                            local_model_name=st.session_state.get("local_model_name", ""),
+                            model_override=st.session_state.get("model_override", ""),
+                            skip_guard=True,
+                        )
+                        if audit_res.revised_document and len(audit_res.revised_document.strip()) > 50:
+                            content = audit_res.revised_document
+                        audit_md = format_audit_report_markdown(audit_res, doc_label=doc_type)
+                        st.session_state.pop(audit_warn_key, None)
+                    except Exception as a_err:
+                        audit_md = ""
+                        st.session_state[audit_warn_key] = (
+                            f"Automatic fact-check could not run ({a_err}). "
+                            "Review your draft carefully or click **Generate Fact-Check Report** below to retry."
+                        )
+
+                st.session_state[cache_key] = content
+                item[doc_type] = content
+                db.update_job_field(url, doc_type, content)
+
+                if audit_md:
+                    merged_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, audit_md)
+                    st.session_state[audit_cache_key] = audit_md
+                    item["Reviewer Audit"] = merged_audit
+                    db.update_job_field(url, "Reviewer Audit", merged_audit)
+
+                st.session_state["active_job_url"] = url
+                safe_fragment_rerun()
+            except Exception as e:
+                st.error(f"Error generating {doc_type}: {e}")
+
+
+def _render_document_audit_section(
+    item: dict,
+    doc_type: str,
+    url: str,
+    job_text: str,
+    edited_doc: str,
+    cache_key: str,
+    audit_cache_key: str,
+    audit_warn_key: str,
+    vault: dict,
+    default_doc_resumes: list[str],
+):
+    """Displays or runs the Accuracy & Fact-Check Grounding Report for resumes and cover letters."""
+    audit_warn = st.session_state.get(audit_warn_key)
+    if audit_warn:
+        st.warning(f"⚠️ {audit_warn}")
+    audit_report = st.session_state.get(audit_cache_key) or db.get_doc_audit(item.get("Reviewer Audit", ""), doc_type)
+    if audit_report and str(audit_report).strip():
+        with st.expander("🛡️ Accuracy & Fact-Check Grounding Report", expanded=True):
+            st.markdown(audit_report)
+    else:
+        with st.expander("🛡️ Accuracy & Fact-Check Grounding Report", expanded=bool(audit_warn)):
+            st.caption("No fact-check grounding report is on file for this draft yet.")
+            if st.button("🔍 Generate Fact-Check Report", key=f"btn_audit_{cache_key}"):
+                with st.spinner(f"Auditing {doc_type} against selected resume profile(s)..."):
+                    try:
+                        audit_resume_pool = combine_selected_resumes(default_doc_resumes, vault) if default_doc_resumes else st.session_state.get("resume_text", "")
+                        audit_res = review_and_refine_document(
+                            draft_text=edited_doc,
+                            master_resume=audit_resume_pool,
+                            job_description=job_text,
+                            doc_type=doc_type,
+                            model_choice=st.session_state.get("model_choice"),
+                            api_key=st.session_state.get("user_api_key"),
+                            local_base_url=st.session_state.get("local_base_url", ""),
+                            local_model_name=st.session_state.get("local_model_name", ""),
+                            model_override=st.session_state.get("model_override", ""),
+                            skip_guard=True,
+                        )
+                        audit_md = format_audit_report_markdown(audit_res, doc_label=doc_type)
+                        merged_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, audit_md)
+                        st.session_state[audit_cache_key] = audit_md
+                        st.session_state.pop(audit_warn_key, None)
+                        item["Reviewer Audit"] = merged_audit
+                        db.update_job_field(url, "Reviewer Audit", merged_audit)
+                        safe_fragment_rerun()
+                    except Exception as a_err:
+                        st.error(f"Audit failed: {a_err}")
+
+
+def _render_document_editor_and_exports(
+    item: dict,
+    doc_type: str,
+    url: str,
+    current_content: str,
+    cache_key: str,
+    audit_cache_key: str,
+    audit_warn_key: str,
+) -> str:
+    """Renders the live preview/editor, persistence actions, download buttons, and Regenerate button."""
+    ats_style_key = "clean"
+    if doc_type == "Tailored Resume":
+        style_options = {
+            "clean": "Standard ATS (Clean Arial, Bold Roles)",
+            "harvard": "Harvard Style (Times New Roman, Divider Rules)",
+            "modern": "Modern Slate (Calibri, Compact Margins)",
+        }
+        c_style, _ = st.columns([3.8, 3.2])
+        with c_style:
+            chosen_label = st.selectbox(
+                "🎨 Template Style:",
+                options=list(style_options.values()),
+                index=0,
+                key=f"ats_style_sel_{cache_key}",
+                help="Applies clean, human-designed margins, professional typography, and ATS-friendly headers to your Word and PDF exports.",
+            )
+            ats_style_key = next((k for k, v in style_options.items() if v == chosen_label), "clean")
+
+    editor_key = f"edit_{cache_key}"
+    if editor_key not in st.session_state:
+        st.session_state[editor_key] = current_content
+
+    safe_doc_type = re.sub(r'[^a-zA-Z0-9_-]', '_', doc_type)
+    pos = item.get("Position", "Job")
+    company = item.get("Company", "")
+    safe_company = re.sub(r'[^a-zA-Z0-9_-]', '_', company) if company and company != "Unknown Company" else ""
+    safe_pos = re.sub(r'[^a-zA-Z0-9_-]', '_', pos)
+    safe_title = f"{safe_company}_{safe_pos}".strip('_') if safe_company else safe_pos
+
+    view_mode = "✏️ Edit Markdown"
+    if doc_type == "Tailored Resume":
+        col_toggle, _ = st.columns([4.2, 2.8])
+        with col_toggle:
+            view_mode = st.radio(
+                "Display Format:",
+                ["🔀 Live Split View", "📄 Formatted ATS Preview", "✏️ Edit Markdown"],
+                index=0,
+                horizontal=True,
+                key=f"view_mode_{cache_key}",
+                label_visibility="collapsed",
+            )
+
+    def _save_edited(text_val: str, notify: bool = False):
+        st.session_state[cache_key] = text_val
+        item[doc_type] = text_val
+        db.update_job_field(url, doc_type, text_val)
+        if notify:
+            st.session_state.pop(f"pdf_bytes_{cache_key}", None)
+            st.toast("✅ Changes applied and saved to database!", icon="💾")
+            safe_fragment_rerun()
+
+    def _render_ats_preview_box(padding: str, max_height: str):
+        preview_html = render_ats_resume_html(st.session_state[editor_key], template_style=ats_style_key)
+        st.markdown(
+            f"""
+            <div style="
+                border: 1px solid rgba(128,128,128,0.25);
+                border-radius: 6px;
+                padding: {padding};
+                max-height: {max_height};
+                overflow-y: auto;
+                background: #ffffff;
+                color: #111827;
+                box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+                margin-bottom: 12px;
+            ">
+                {preview_html}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if doc_type == "Tailored Resume" and view_mode == "🔀 Live Split View":
+        sp1, sp2 = st.columns([1, 1], gap="medium")
+        with sp1:
+            st.caption("✏️ **Markdown Source (Editable)**")
+            edited_doc = st.text_area(
+                "Edit Resume Markdown:",
+                height=580,
+                key=editor_key,
+                label_visibility="collapsed",
+            )
+            col_btn, _ = st.columns([3.2, 2.8])
+            with col_btn:
+                if st.button("💾 Apply Changes", key=f"apply_{cache_key}", type="secondary", width="stretch"):
+                    _save_edited(edited_doc, notify=True)
+            if edited_doc != current_content:
+                _save_edited(edited_doc, notify=False)
+        with sp2:
+            st.caption("📄 **Live ATS Template Preview**")
+            _render_ats_preview_box("24px 28px", "580px")
+    elif doc_type == "Tailored Resume" and view_mode == "📄 Formatted ATS Preview":
+        _render_ats_preview_box("32px 40px", "600px")
+        edited_doc = st.session_state[editor_key]
+    else:
+        edited_doc = st.text_area(
+            f"{doc_type} (Editable):",
+            height=420,
+            key=editor_key,
+        )
+        col_btn, _ = st.columns([2.5, 5.5])
+        with col_btn:
+            if st.button("💾 Apply Changes", key=f"apply_{cache_key}", type="secondary", width="stretch"):
+                _save_edited(edited_doc, notify=True)
+        if edited_doc != current_content:
+            _save_edited(edited_doc, notify=False)
+
+    def _handle_regenerate():
+        st.session_state[cache_key] = ""
+        st.session_state.pop(editor_key, None)
+        st.session_state.pop(f"pdf_bytes_{cache_key}", None)
+        st.session_state.pop(audit_cache_key, None)
+        st.session_state.pop(audit_warn_key, None)
+        st.session_state["active_job_url"] = url
+        db.update_job_field(url, doc_type, "")
+        if doc_type in ("Tailored Resume", "Cover Letter"):
+            updated_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, "")
+            item["Reviewer Audit"] = updated_audit
+            db.update_job_field(url, "Reviewer Audit", updated_audit)
+        safe_fragment_rerun()
+
+    if doc_type == "Tailored Resume":
+        has_pdf = is_pdf_conversion_available()
+        if has_pdf:
+            col1, col_pdf, col_reg = st.columns([2.5, 2.5, 1.5])
+        else:
+            col1, col_reg = st.columns([3.5, 1.5])
+            col_pdf = None
+        render_ats_resume_downloads(
+            markdown_text=edited_doc,
+            ats_style_key=ats_style_key,
+            file_stem=f"ATS_Resume_{safe_title}",
+            docx_key=f"dl_{cache_key}",
+            pdf_state_key=f"pdf_bytes_{cache_key}",
+            prep_pdf_key=f"prep_pdf_{cache_key}",
+            pdf_dl_key=f"dl_pdf_{cache_key}",
+            docx_label="📥 Download ATS (.docx)",
+            col_docx=col1,
+            col_pdf=col_pdf,
+        )
+        with col_reg:
+            if st.button("🔄 Regenerate", width="stretch", key=f"regen_{cache_key}"):
+                _handle_regenerate()
+    else:
+        col1, col_reg = st.columns([3.5, 1.5])
+        with col1:
+            st.download_button(
+                "📥 Download (.docx)",
+                data=lambda: generate_docx_from_markdown(edited_doc),
+                file_name=f"{safe_doc_type}_{safe_title}.docx",
+                type="primary",
+                width="stretch",
+                key=f"dl_{cache_key}"
+            )
+        with col_reg:
+            if st.button("🔄 Regenerate", width="stretch", key=f"regen_{cache_key}"):
+                _handle_regenerate()
+
+    return edited_doc
+
+
 @st.fragment
 def document_generator(item: dict, doc_type: str, generator_func):
     url, job_text = item.get("URL"), item.get("Job Text", "")
     cache_key = f"{doc_type}_{url}"
     audit_cache_key = f"Reviewer_Audit_{doc_type}_{url}"
     audit_warn_key = f"Reviewer_Audit_Warn_{doc_type}_{url}"
-    
+
     db_content = item.get(doc_type)
     if pd.isna(db_content) or not db_content or str(db_content).lower() == "nan":
         db_content = ""
-        
     if cache_key not in st.session_state:
         st.session_state[cache_key] = db_content
 
@@ -418,7 +760,7 @@ def document_generator(item: dict, doc_type: str, generator_func):
     db_audit = db.get_doc_audit(db_audit_raw, doc_type)
     if audit_cache_key not in st.session_state:
         st.session_state[audit_cache_key] = db_audit
-        
+
     current_content = st.session_state[cache_key]
     vault = st.session_state.get("resumes_vault") or load_resumes()
     vault_names = list(vault.keys())
@@ -428,359 +770,23 @@ def document_generator(item: dict, doc_type: str, generator_func):
     ] or (vault_names[:1] if vault_names else [])
 
     if not current_content:
-        interview_stage = "Full Loop (All Stages)"
-        followup_type = "Post-Application Follow-Up (10-14+ Days Quiet)"
+        _render_document_generation_panel(
+            item, doc_type, generator_func, url, job_text,
+            cache_key, audit_cache_key, audit_warn_key,
+            vault, vault_names, default_doc_resumes,
+        )
+        return
 
-        chosen_doc_resumes = default_doc_resumes
-        if len(vault_names) > 1:
-            with st.expander("📄 Resume Profile(s) to Pull Details From", expanded=False):
-                chosen_doc_resumes = st.multiselect(
-                    "Select Resumes to Pull Achievements & Context From:",
-                    options=vault_names,
-                    default=default_doc_resumes,
-                    key=f"doc_res_sel_{cache_key}",
-                    help="Select 1 or more saved resumes. If you select multiple, Skippy pulls the best-matching roles, projects, skills, and bullet points across them into a single cohesive document.",
-                ) or default_doc_resumes
-        active_resume_for_gen = combine_selected_resumes(chosen_doc_resumes, vault) if chosen_doc_resumes else st.session_state.get("resume_text", "")
-
-        if doc_type == "Interview Prep":
-            interview_stage = st.selectbox(
-                "🎯 Target Interview Stage:",
-                [
-                    "Full Loop (All Stages)",
-                    "Phone / Recruiter Screen (30 min — Motivation, Pitch & High-Level Fit)",
-                    "Technical / Subject Matter Expert (45-60 min — Deep Domain, Systems & Case Defense)",
-                    "Behavioral / Final Round (Leadership, Conflict Resolution & Executive Alignment)",
-                ],
-                key=f"stage_sel_{cache_key}",
-                help="Customizes STAR stories, ways to address missing skills, and smart questions to ask for your specific interview round."
-            )
-        elif doc_type == "Followup Note":
-            followup_type = st.selectbox(
-                "📬 Follow-Up / Thank-You Scenario:",
-                [
-                    "Post-Application Follow-Up (10-14+ Days Quiet)",
-                    "Post-Interview Thank-You Note (Within 24 Hours)",
-                    "Status Update / Value-Add Check-In",
-                ],
-                key=f"followup_sel_{cache_key}",
-                help="Generates concise 60–120 word Email + LinkedIn/Portal messages with zero banned AI clichés."
-            )
-
-        if st.button(f"⚡ Generate {doc_type}", key=f"btn_{cache_key}", type="primary"):
-            with st.spinner(f"Generating {doc_type}..."):
-                try:
-                    if doc_type == "Interview Prep":
-                        content = generator_func(
-                            active_resume_for_gen,
-                            job_text,
-                            st.session_state.get("model_choice"),
-                            st.session_state.get("user_api_key"),
-                            st.session_state.get("local_base_url"),
-                            st.session_state.get("local_model_name"),
-                            missing_skills=str(item.get("Missing Skills") or ""),
-                            tailored_resume=str(item.get("Tailored Resume") or ""),
-                            cover_letter=str(item.get("Cover Letter") or ""),
-                            interview_stage=interview_stage,
-                            model_override=st.session_state.get("model_override", ""),
-                            skip_guard=True,
-                        )
-                    elif doc_type == "Application QA":
-                        content = generator_func(
-                            active_resume_for_gen,
-                            job_text,
-                            st.session_state.get("model_choice"),
-                            st.session_state.get("user_api_key"),
-                            st.session_state.get("local_base_url"),
-                            st.session_state.get("local_model_name"),
-                            model_override=st.session_state.get("model_override", ""),
-                            skip_guard=True,
-                        )
-                    elif doc_type == "Followup Note":
-                        content = generator_func(
-                            active_resume_for_gen,
-                            job_text,
-                            st.session_state.get("model_choice"),
-                            st.session_state.get("user_api_key"),
-                            st.session_state.get("local_base_url"),
-                            st.session_state.get("local_model_name"),
-                            scenario=followup_type,
-                            model_override=st.session_state.get("model_override", ""),
-                            skip_guard=True,
-                        )
-                    else:
-                        content = generator_func(
-                            active_resume_for_gen,
-                            job_text,
-                            st.session_state.get("model_choice"),
-                            st.session_state.get("user_api_key"),
-                            st.session_state.get("local_base_url"),
-                            st.session_state.get("local_model_name"),
-                            model_override=st.session_state.get("model_override", ""),
-                            skip_guard=True,
-                        )
-
-                    audit_md = ""
-                    if doc_type in ("Tailored Resume", "Cover Letter"):
-                        try:
-                            audit_res = review_and_refine_document(
-                                draft_text=content,
-                                master_resume=active_resume_for_gen,
-                                job_description=job_text,
-                                doc_type=doc_type,
-                                model_choice=st.session_state.get("model_choice"),
-                                api_key=st.session_state.get("user_api_key"),
-                                local_base_url=st.session_state.get("local_base_url", ""),
-                                local_model_name=st.session_state.get("local_model_name", ""),
-                                model_override=st.session_state.get("model_override", ""),
-                                skip_guard=True,
-                            )
-                            if audit_res.revised_document and len(audit_res.revised_document.strip()) > 50:
-                                content = audit_res.revised_document
-                            audit_md = format_audit_report_markdown(audit_res, doc_label=doc_type)
-                            st.session_state.pop(audit_warn_key, None)
-                        except Exception as a_err:
-                            audit_md = ""
-                            st.session_state[audit_warn_key] = (
-                                f"Automatic fact-check could not run ({a_err}). "
-                                "Review your draft carefully or click **Generate Fact-Check Report** below to retry."
-                            )
-
-                    st.session_state[cache_key] = content
-                    item[doc_type] = content
-                    db.update_job_field(url, doc_type, content)
-
-                    if audit_md:
-                        merged_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, audit_md)
-                        st.session_state[audit_cache_key] = audit_md
-                        item["Reviewer Audit"] = merged_audit
-                        db.update_job_field(url, "Reviewer Audit", merged_audit)
-
-                    st.session_state["active_job_url"] = url
-                    safe_fragment_rerun()
-                except Exception as e:
-                    st.error(f"Error generating {doc_type}: {e}")
-    else:
-        ats_style_key = "clean"
-        if doc_type == "Tailored Resume":
-            style_options = {
-                "clean": "Standard ATS (Clean Arial, Bold Roles)",
-                "harvard": "Harvard Style (Times New Roman, Divider Rules)",
-                "modern": "Modern Slate (Calibri, Compact Margins)",
-            }
-            c_style, _ = st.columns([3.8, 3.2])
-            with c_style:
-                chosen_label = st.selectbox(
-                    "🎨 Template Style:",
-                    options=list(style_options.values()),
-                    index=0,
-                    key=f"ats_style_sel_{cache_key}",
-                    help="Applies clean, human-designed margins, professional typography, and ATS-friendly headers to your Word and PDF exports.",
-                )
-                ats_style_key = next((k for k, v in style_options.items() if v == chosen_label), "clean")
-
-        editor_key = f"edit_{cache_key}"
-        if editor_key not in st.session_state:
-            st.session_state[editor_key] = current_content
-
-        safe_doc_type = re.sub(r'[^a-zA-Z0-9_-]', '_', doc_type)
-        pos = item.get("Position", "Job")
-        company = item.get("Company", "")
-        safe_company = re.sub(r'[^a-zA-Z0-9_-]', '_', company) if company and company != "Unknown Company" else ""
-        safe_pos = re.sub(r'[^a-zA-Z0-9_-]', '_', pos)
-        safe_title = f"{safe_company}_{safe_pos}".strip('_') if safe_company else safe_pos
-
-        view_mode = "✏️ Edit Markdown"
-        if doc_type == "Tailored Resume":
-            col_toggle, _ = st.columns([4.2, 2.8])
-            with col_toggle:
-                view_mode = st.radio(
-                    "Display Format:",
-                    ["🔀 Live Split View", "📄 Formatted ATS Preview", "✏️ Edit Markdown"],
-                    index=0,
-                    horizontal=True,
-                    key=f"view_mode_{cache_key}",
-                    label_visibility="collapsed",
-                )
-
-        if doc_type == "Tailored Resume" and view_mode == "🔀 Live Split View":
-            sp1, sp2 = st.columns([1, 1], gap="medium")
-            with sp1:
-                st.caption("✏️ **Markdown Source (Editable)**")
-                edited_doc = st.text_area(
-                    "Edit Resume Markdown:",
-                    height=580,
-                    key=editor_key,
-                    label_visibility="collapsed",
-                )
-                col_btn, _ = st.columns([3.2, 2.8])
-                with col_btn:
-                    if st.button("💾 Apply Changes", key=f"apply_{cache_key}", type="secondary", width="stretch"):
-                        st.session_state[cache_key] = edited_doc
-                        item[doc_type] = edited_doc
-                        db.update_job_field(url, doc_type, edited_doc)
-                        st.session_state.pop(f"pdf_bytes_{cache_key}", None)
-                        st.toast("✅ Changes applied and saved to database!", icon="💾")
-                        safe_fragment_rerun()
-                if edited_doc != current_content:
-                    st.session_state[cache_key] = edited_doc
-                    item[doc_type] = edited_doc
-                    db.update_job_field(url, doc_type, edited_doc)
-            with sp2:
-                st.caption("📄 **Live ATS Template Preview**")
-                preview_html = render_ats_resume_html(st.session_state[editor_key], template_style=ats_style_key)
-                st.markdown(
-                    f"""
-                    <div style="
-                        border: 1px solid rgba(128,128,128,0.25);
-                        border-radius: 6px;
-                        padding: 24px 28px;
-                        max-height: 580px;
-                        overflow-y: auto;
-                        background: #ffffff;
-                        color: #111827;
-                        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
-                        margin-bottom: 12px;
-                    ">
-                        {preview_html}
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-        elif doc_type == "Tailored Resume" and view_mode == "📄 Formatted ATS Preview":
-            preview_html = render_ats_resume_html(st.session_state[editor_key], template_style=ats_style_key)
-            st.markdown(
-                f"""
-                <div style="
-                    border: 1px solid rgba(128,128,128,0.25);
-                    border-radius: 6px;
-                    padding: 32px 40px;
-                    max-height: 600px;
-                    overflow-y: auto;
-                    background: #ffffff;
-                    color: #111827;
-                    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
-                    margin-bottom: 12px;
-                ">
-                    {preview_html}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            edited_doc = st.session_state[editor_key]
-        else:
-            edited_doc = st.text_area(
-                f"{doc_type} (Editable):",
-                height=420,
-                key=editor_key,
-            )
-            col_btn, _ = st.columns([2.5, 5.5])
-            with col_btn:
-                if st.button("💾 Apply Changes", key=f"apply_{cache_key}", type="secondary", width="stretch"):
-                    st.session_state[cache_key] = edited_doc
-                    item[doc_type] = edited_doc
-                    db.update_job_field(url, doc_type, edited_doc)
-                    st.session_state.pop(f"pdf_bytes_{cache_key}", None)
-                    st.toast("✅ Changes applied and saved to database!", icon="💾")
-                    safe_fragment_rerun()
-            if edited_doc != current_content:
-                st.session_state[cache_key] = edited_doc
-                item[doc_type] = edited_doc
-                db.update_job_field(url, doc_type, edited_doc)
-
-        if doc_type == "Tailored Resume":
-            has_pdf = is_pdf_conversion_available()
-            if has_pdf:
-                col1, col_pdf, col_reg = st.columns([2.5, 2.5, 1.5])
-            else:
-                col1, col_reg = st.columns([3.5, 1.5])
-                col_pdf = None
-            render_ats_resume_downloads(
-                markdown_text=edited_doc,
-                ats_style_key=ats_style_key,
-                file_stem=f"ATS_Resume_{safe_title}",
-                docx_key=f"dl_{cache_key}",
-                pdf_state_key=f"pdf_bytes_{cache_key}",
-                prep_pdf_key=f"prep_pdf_{cache_key}",
-                pdf_dl_key=f"dl_pdf_{cache_key}",
-                docx_label="📥 Download ATS (.docx)",
-                col_docx=col1,
-                col_pdf=col_pdf,
-            )
-            with col_reg:
-                if st.button("🔄 Regenerate", width="stretch", key=f"regen_{cache_key}"):
-                    st.session_state[cache_key] = ""
-                    st.session_state.pop(editor_key, None)
-                    st.session_state.pop(f"pdf_bytes_{cache_key}", None)
-                    st.session_state.pop(audit_cache_key, None)
-                    st.session_state.pop(audit_warn_key, None)
-                    st.session_state["active_job_url"] = url
-                    db.update_job_field(url, doc_type, "")
-                    updated_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, "")
-                    item["Reviewer Audit"] = updated_audit
-                    db.update_job_field(url, "Reviewer Audit", updated_audit)
-                    safe_fragment_rerun()
-        else:
-            col1, col_reg = st.columns([3.5, 1.5])
-            with col1:
-                st.download_button(
-                    "📥 Download (.docx)",
-                    data=lambda: generate_docx_from_markdown(edited_doc),
-                    file_name=f"{safe_doc_type}_{safe_title}.docx",
-                    type="primary",
-                    width="stretch",
-                    key=f"dl_{cache_key}"
-                )
-            with col_reg:
-                if st.button("🔄 Regenerate", width="stretch", key=f"regen_{cache_key}"):
-                    st.session_state[cache_key] = ""
-                    st.session_state.pop(editor_key, None)
-                    st.session_state.pop(audit_cache_key, None)
-                    st.session_state.pop(audit_warn_key, None)
-                    st.session_state["active_job_url"] = url
-                    db.update_job_field(url, doc_type, "")
-                    if doc_type in ("Tailored Resume", "Cover Letter"):
-                        updated_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, "")
-                        item["Reviewer Audit"] = updated_audit
-                        db.update_job_field(url, "Reviewer Audit", updated_audit)
-                    safe_fragment_rerun()
-
-        if doc_type in ("Tailored Resume", "Cover Letter"):
-            audit_warn = st.session_state.get(audit_warn_key)
-            if audit_warn:
-                st.warning(f"⚠️ {audit_warn}")
-            audit_report = st.session_state.get(audit_cache_key) or db.get_doc_audit(item.get("Reviewer Audit", ""), doc_type)
-            if audit_report and str(audit_report).strip():
-                with st.expander("🛡️ Accuracy & Fact-Check Grounding Report", expanded=True):
-                    st.markdown(audit_report)
-            else:
-                with st.expander("🛡️ Accuracy & Fact-Check Grounding Report", expanded=bool(audit_warn)):
-                    st.caption("No fact-check grounding report is on file for this draft yet.")
-                    if st.button("🔍 Generate Fact-Check Report", key=f"btn_audit_{cache_key}"):
-                        with st.spinner(f"Auditing {doc_type} against selected resume profile(s)..."):
-                            try:
-                                audit_resume_pool = combine_selected_resumes(default_doc_resumes, vault) if default_doc_resumes else st.session_state.get("resume_text", "")
-                                audit_res = review_and_refine_document(
-                                    draft_text=edited_doc,
-                                    master_resume=audit_resume_pool,
-                                    job_description=job_text,
-                                    doc_type=doc_type,
-                                    model_choice=st.session_state.get("model_choice"),
-                                    api_key=st.session_state.get("user_api_key"),
-                                    local_base_url=st.session_state.get("local_base_url", ""),
-                                    local_model_name=st.session_state.get("local_model_name", ""),
-                                    model_override=st.session_state.get("model_override", ""),
-                                    skip_guard=True,
-                                )
-                                audit_md = format_audit_report_markdown(audit_res, doc_label=doc_type)
-                                merged_audit = db.set_doc_audit(item.get("Reviewer Audit", ""), doc_type, audit_md)
-                                st.session_state[audit_cache_key] = audit_md
-                                st.session_state.pop(audit_warn_key, None)
-                                item["Reviewer Audit"] = merged_audit
-                                db.update_job_field(url, "Reviewer Audit", merged_audit)
-                                safe_fragment_rerun()
-                            except Exception as a_err:
-                                st.error(f"Audit failed: {a_err}")
+    edited_doc = _render_document_editor_and_exports(
+        item, doc_type, url, current_content,
+        cache_key, audit_cache_key, audit_warn_key,
+    )
+    if doc_type in ("Tailored Resume", "Cover Letter"):
+        _render_document_audit_section(
+            item, doc_type, url, job_text, edited_doc,
+            cache_key, audit_cache_key, audit_warn_key,
+            vault, default_doc_resumes,
+        )
 
 
 def _format_gate_pill(gate_val: str) -> str:

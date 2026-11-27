@@ -10,7 +10,6 @@ import re
 import os
 from typing import Any, Optional, List
 from pydantic import BaseModel, Field
-import plotly.graph_objects as go
 
 # ---------------------------------------------------------------------------
 # 14 Universal Domain Vector Definitions
@@ -1236,73 +1235,60 @@ EVALUATION INSTRUCTIONS & RUBRIC:
     return prompt.strip()
 
 
-def render_alignment_radar_chart(scores: dict[str, float]) -> go.Figure | None:
+def render_alignment_radar_chart(scores: dict[str, float]) -> dict | None:
     """
-    Renders an interactive Plotly polygonal radar chart displaying alignment percentages across domains.
-    Uses gridshape="linear" to render geometric polygons (triangles, diamonds, pentagons, hexagons, heptagons)
-    dynamically scaling between 3 and 7 active vertices based on the candidate's highest affinities.
+    Builds an Apache ECharts polygonal radar option dict displaying alignment percentages across domains.
+    Dynamically scales between 3 and 7 active vertices based on the candidate's highest affinities.
     """
     if not scores or sum(scores.values()) == 0:
         return None
 
-    # Sort descending
     sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    
-    # Positive items only
     positive_items = [item for item in sorted_items if item[1] > 0]
-    
+
     # Cap at 7 max items, minimum 3 items for a valid 2D polygon
     if len(positive_items) >= 3:
         top_items = positive_items[:7]
     elif len(sorted_items) >= 3:
         top_items = sorted_items[:3]
     else:
-        # Fallback if fewer than 3 total items exist
         top_items = list(positive_items)
-        baseline_keys = ["Operational Execution", "Technical Mastery", "Compliance Rigor"]
-        for bk in baseline_keys:
+        for bk in ("Operational Execution", "Technical Mastery", "Compliance Rigor"):
             if len(top_items) >= 3:
                 break
             if not any(item[0] == bk for item in top_items):
                 top_items.append((bk, 20.0))
 
     categories = [DOMAIN_VECTORS.get(k, {}).get("short_title", k.replace("_", " ").title()) for k, _ in top_items]
-    values = [float(val) for _, val in top_items]
+    values = [round(float(val), 1) for _, val in top_items]
+    axis_max = max(max(values) + 10.0, 50.0)
 
-    # Close radar loop
-    categories.append(categories[0])
-    values.append(values[0])
-
-    fig = go.Figure(data=go.Scatterpolar(
-        r=values,
-        theta=categories,
-        fill="toself",
-        fillcolor="rgba(99, 102, 241, 0.32)",
-        line=dict(color="#6366f1", width=2.5),
-        marker=dict(size=6, color="#4f46e5"),
-        name="Alignment %"
-    ))
-
-    fig.update_layout(
-        polar=dict(
-            gridshape="linear",  # Converts circle to geometric polygon!
-            radialaxis=dict(
-                visible=True,
-                range=[0, max(max(values) + 10, 50)],
-                tickfont=dict(size=9, color="#94a3b8"),
-                gridcolor="rgba(148, 163, 184, 0.25)",
-                linecolor="rgba(148, 163, 184, 0.25)"
-            ),
-            angularaxis=dict(
-                tickfont=dict(size=11, color="#e2e8f0"),
-                gridcolor="rgba(148, 163, 184, 0.25)",
-                linecolor="rgba(148, 163, 184, 0.25)"
-            )
-        ),
-        margin=dict(l=35, r=35, t=25, b=25),
-        height=330,
-        showlegend=False,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)"
-    )
-    return fig
+    return {
+        "animation": False,
+        "tooltip": {"trigger": "item"},
+        "radar": {
+            "shape": "polygon",
+            "radius": "66%",
+            "indicator": [{"name": cat, "max": axis_max} for cat in categories],
+            "axisName": {"fontSize": 11},
+            "splitLine": {"lineStyle": {"color": "rgba(148, 163, 184, 0.28)"}},
+            "axisLine": {"lineStyle": {"color": "rgba(148, 163, 184, 0.28)"}},
+            "splitArea": {"show": False},
+        },
+        "series": [
+            {
+                "type": "radar",
+                "data": [
+                    {
+                        "value": values,
+                        "name": "Alignment %",
+                        "symbol": "circle",
+                        "symbolSize": 6,
+                        "lineStyle": {"color": "#6366f1", "width": 2.5},
+                        "itemStyle": {"color": "#4f46e5"},
+                        "areaStyle": {"color": "rgba(99, 102, 241, 0.32)"},
+                    }
+                ],
+            }
+        ],
+    }

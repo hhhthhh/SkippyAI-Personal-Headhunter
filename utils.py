@@ -568,50 +568,6 @@ def check_and_handle_pipeline_completion() -> bool:
             return True
     return False
 
-def render_pipeline_spinner_html(
-    title: str,
-    subtitle: str = "",
-    compact: bool = False,
-    is_stopping: bool = False,
-) -> None:
-    """Renders a continuous 60fps CSS spinner graphic alongside status text."""
-    ring_color = "#f59e0b" if is_stopping else "#3b82f6"
-    size_px = 18 if compact else 24
-    border_px = 2.5 if compact else 3
-    font_size = "0.95rem" if compact else "1.15rem"
-    safe_title = html.escape(str(title or ""))
-    safe_subtitle = html.escape(str(subtitle or ""))
-    sub_html = (
-        f"<div style='font-size:0.82rem; opacity:0.85; margin-top:2px;'>{safe_subtitle}</div>"
-        if safe_subtitle else ""
-    )
-    st.markdown(
-        f"""
-        <style>
-        @keyframes skippy-spin {{
-            0% {{ transform: rotate(0deg); }}
-            100% {{ transform: rotate(360deg); }}
-        }}
-        </style>
-        <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
-            <div style="
-                width:{size_px}px;
-                height:{size_px}px;
-                border:{border_px}px solid rgba(59, 130, 246, 0.2);
-                border-top:{border_px}px solid {ring_color};
-                border-radius:50%;
-                animation: skippy-spin 0.8s linear infinite;
-                flex-shrink:0;
-            "></div>
-            <div>
-                <div style="font-weight:600; font-size:{font_size}; line-height:1.25;">{safe_title}</div>
-                {sub_html}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 
 def start_scraper_evaluations(items: list) -> None:
     """Starts the background evaluation pipeline for a list of job dicts or URLs."""
@@ -634,8 +590,7 @@ def start_scraper_evaluations(items: list) -> None:
 
     api_key = st.session_state.get("user_api_key", "")
     if not api_key:
-        config = load_local_config()
-        api_key = config.get("user_api_key") or os.environ.get("USER_API_KEY", "")
+        api_key = load_local_config() or os.environ.get("USER_API_KEY", "")
 
     started = pipeline_manager.start_url_pipeline(
         urls=items,
@@ -872,7 +827,6 @@ def _render_running_top_pipeline_banner():
                     st.rerun()
         with btn_col2:
             if st.button("📁 View Completed in Evaluations ➔", key="btn_view_running_banner_hist", type="primary", width="stretch"):
-                st.session_state["active_history_source"] = source
                 navigate_to_page("pages/2_history.py")
 
     st.markdown("---")
@@ -980,7 +934,6 @@ def render_global_top_pipeline_banner():
             col_view, col_dismiss, _ = st.columns([3.5, 2.0, 4.5], vertical_alignment="center")
             with col_view:
                 if st.button("📁 View in Evaluations ➔", key="btn_view_done_banner_hist", type="primary", width="stretch"):
-                    st.session_state["active_history_source"] = src
                     st.session_state.pop("completion_batch", None)
                     pipeline_manager.dismiss_latest_run()
                     navigate_to_page("pages/2_history.py")
@@ -1037,7 +990,6 @@ def render_global_pipeline_status():
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("📁 Evaluations", key="sb_view_hist", width="stretch"):
-                    st.session_state["active_history_source"] = src
                     st.session_state.pop("completion_batch", None)
                     pipeline_manager.dismiss_latest_run()
                     navigate_to_page("pages/2_history.py")
@@ -1368,11 +1320,297 @@ def setup_sidebar():
         else:
             sb_test_status.error(f"❌ {msg[:120]}")
 
+def _render_onboarding_step_provider() -> None:
+    """Onboarding Step 1: Connect an AI provider or local Ollama server."""
+    st.title("Welcome to Skippy! 🦘")
+    st.progress(0.33, text="Step 1 of 3: Connect Your AI Provider")
+    st.write("Before reviewing job postings and tailoring resumes, connect Skippy to an AI provider.")
+
+    model_options = ["Google Gemini", "OpenAI ChatGPT", "xAI Grok", "Anthropic Claude", "Local / Custom (Ollama)"]
+    current_choice = st.session_state.get("model_choice", "Google Gemini")
+    if current_choice not in model_options:
+        current_choice = "Google Gemini"
+        st.session_state["model_choice"] = current_choice
+
+    if st.session_state.get("onboarding_model_choice_select") not in model_options:
+        st.session_state["onboarding_model_choice_select"] = current_choice
+
+    selected_model = st.selectbox(
+        "Select AI Provider",
+        model_options,
+        key="onboarding_model_choice_select",
+    )
+    if "Local" not in selected_model:
+        st.session_state["model_choice"] = selected_model
+        st.session_state["sb_model_choice_select"] = selected_model
+
+    api_key_val = st.session_state.get("user_api_key", "")
+    local_base = st.session_state.get("local_base_url", "http://localhost:11434/v1")
+    local_model = st.session_state.get("local_model_name", "llama3")
+
+    with st.container():
+        if selected_model == "Google Gemini":
+            st.info(
+                "💡 **Google Gemini is recommended**. "
+                "[Click here to get your Gemini API key from Google AI Studio ↗](https://aistudio.google.com/app/apikey)",
+                icon="✨"
+            )
+            api_key_input = st.text_input(
+                "Enter Google Gemini API Key",
+                value=api_key_val,
+                type="password",
+                key="onboarding_gemini_api_key_input",
+                on_change="ignore",
+                help="Get a free key from Google AI Studio (takes 30 seconds, no credit card required)."
+            )
+        elif selected_model == "Local / Custom (Ollama)":
+            st.info(
+                "💻 **100% Private & Offline**: Requires [Ollama](https://ollama.com) running on your computer. "
+                "In your terminal, start your model with: `ollama run llama3`",
+                icon="🖥️"
+            )
+            c_url, c_mod = st.columns(2)
+            with c_url:
+                local_base = st.text_input(
+                    "Local API Base URL",
+                    value=local_base,
+                    key="onboarding_local_base_url_input",
+                    on_change="ignore",
+                )
+            with c_mod:
+                local_model = st.text_input(
+                    "Local Model Name",
+                    value=local_model,
+                    key="onboarding_local_model_name_input",
+                    on_change="ignore",
+                )
+            api_key_input = ""
+        else:
+            provider_slug = selected_model.replace(" ", "_").lower()
+            api_key_input = st.text_input(
+                f"Enter {selected_model} API Key",
+                value=api_key_val,
+                type="password",
+                key=f"onboarding_{provider_slug}_api_key_input",
+                on_change="ignore",
+                help=f"Enter your API key for {selected_model}."
+            )
+
+    clean_input_key = (api_key_input or "").strip().strip("'\"")
+
+    col_test, col_save = st.columns([1, 1.4])
+    with col_test:
+        test_clicked = st.button(
+            "🧪 Test Connection",
+            key="btn_onboarding_test_connection",
+            type="secondary",
+            width="stretch",
+        )
+    with col_save:
+        save_clicked = st.button(
+            "Save & Continue ➔",
+            key="btn_onboarding_save_continue",
+            type="primary",
+            width="stretch",
+        )
+
+    status_slot = st.empty()
+
+    st.markdown("---")
+    render_help_section(in_sidebar=False)
+
+    if test_clicked:
+        status_slot.info("⏳ Testing AI connection...")
+        test_key = clean_input_key if selected_model != "Local / Custom (Ollama)" else ""
+        ok, msg = test_ai_connection(
+            selected_model,
+            test_key,
+            local_base_url=local_base,
+            local_model_name=local_model,
+        )
+        if ok:
+            status_slot.success(f"✅ {msg}")
+        else:
+            status_slot.error(f"❌ {msg}")
+
+    if save_clicked:
+        st.session_state["model_choice"] = selected_model
+        st.session_state["sb_model_choice_select"] = selected_model
+        set_setting("model_choice", selected_model)
+        if selected_model == "Local / Custom (Ollama)":
+            set_setting("local_base_url", local_base)
+            set_setting("local_model_name", local_model)
+            st.session_state["local_base_url"] = local_base
+            st.session_state["local_model_name"] = local_model
+            st.session_state["sb_local_base_url"] = local_base
+            st.session_state["sb_local_model_name"] = local_model
+            st.session_state["show_key_success"] = True
+            st.rerun()
+        elif clean_input_key:
+            save_local_config(clean_input_key)
+            st.session_state["user_api_key"] = clean_input_key
+            st.session_state["show_key_success"] = True
+            st.rerun()
+        else:
+            status_slot.warning("Please enter a valid API key to continue.")
+
+    st.stop()
+
+
+def _render_onboarding_step_resume() -> None:
+    """Onboarding Step 2: Upload or paste the user's master resume."""
+    st.title("Welcome to Skippy! 🦘")
+    st.progress(0.66, text="Step 2 of 3: Add Your Master Resume")
+    st.write(
+        "Your **Master Resume** is your complete work history containing all your jobs, skills, certifications, and projects. "
+        "Don't worry about keeping it under one page! Skippy will pick and choose the best parts whenever it creates a custom resume for a specific job."
+    )
+    st.info("🔒 **100% Local Privacy:** Your resume is stored safely in your local SQLite database on your hard drive and is never shared.", icon="🛡️")
+
+    uploaded_resume_file = st.file_uploader(
+        "📁 Drag and drop your resume file (.docx, .pdf, .md, .txt):",
+        type=["docx", "pdf", "md", "txt"],
+        key="onboarding_resume_file_uploader",
+        help="Upload your existing resume in Word, PDF, Markdown, or text format."
+    )
+
+    if uploaded_resume_file is not None:
+        extracted_resume_text = parse_resume_file(uploaded_resume_file)
+        if extracted_resume_text and extracted_resume_text.strip():
+            st.session_state["onboarding_resume_text_buffer"] = extracted_resume_text
+            st.toast(f"Extracted resume from {uploaded_resume_file.name}!", icon="📄")
+
+    current_buffer = st.session_state.get("onboarding_resume_text_buffer", "")
+    with st.form("onboarding_resume_form"):
+        initial_resume = st.text_area(
+            "Master Resume Content (Editable):",
+            value=current_buffer,
+            height=320,
+            placeholder="# Your Name\n\n## Experience\n- Lead Role at Company (2020-Present)...",
+            help="Review, edit, or paste your work history here."
+        )
+        saved = st.form_submit_button("Save Resume & Continue ➔", type="primary", width="stretch")
+
+        if saved:
+            if not initial_resume.strip():
+                st.warning("Please upload a file or paste your resume before proceeding.")
+            else:
+                st.session_state.resume_text = initial_resume
+                save_resumes({"Master Resume": initial_resume})
+                st.session_state["resumes_vault"] = {"Master Resume": initial_resume}
+                st.session_state["selected_resumes"] = ["Master Resume"]
+                st.success("Master resume saved! Setting up your career profile...")
+                st.rerun()
+
+    st.markdown("---")
+    render_help_section(in_sidebar=False)
+    st.stop()
+
+
+def _render_onboarding_step_profile() -> None:
+    """Onboarding Step 3: Auto-detect, pick a career track, take the quiz, or skip."""
+    st.title("Welcome to Skippy! 🦘")
+    st.progress(1.0, text="Step 3 of 3: Choose Your Career Field & Direction")
+    st.markdown(
+        "Skippy adapts to candidates across all walks of work—from skilled trades, first responders, "
+        "and military veterans to healthcare clinicians, engineers, and business professionals. "
+        "Let AI discover your profile from your resume in 1 click, choose a career field, or answer 7 quick questions."
+    )
+
+    with st.container(border=True):
+        st.markdown("### ⚡ Auto-Detect Career Profile from Resume (Recommended)")
+        st.caption("AI analyzes your uploaded master resume to automatically identify your career field, licenses, specialized tools, and core competencies.")
+        if st.button("⚡ Generate Career Profile with AI", type="primary", width="stretch", key="btn_onboard_hero_autodetect"):
+            with st.spinner("Setting up your career profile..."):
+                detected_profile = career_compass.auto_detect_alignment_from_resume(
+                    st.session_state.get("resume_text", ""),
+                    use_ai=True,
+                    industry_hint="",
+                    model_choice=st.session_state.get("model_choice"),
+                    api_key=st.session_state.get("user_api_key")
+                )
+                detected_profile["adapted_prompt"] = career_compass.generate_adapted_custom_prompt(detected_profile)
+                save_user_profile(detected_profile)
+                st.session_state["user_profile"] = detected_profile
+                set_active_prompt_mode(PROMPT_MODE_COMPASS)
+                mark_onboarding_completed()
+                st.session_state["show_quick_start"] = True
+                st.toast(f"🎯 Career Profile Detected: {detected_profile.get('industry_title') or detected_profile.get('archetype_title', 'Specialist')}", icon="✅")
+                st.rerun()
+
+    with st.expander("🎯 Or Choose a Popular Career Track"):
+        popular_tracks = [
+            "Technology & Software Engineering",
+            "Clinical Healthcare & Nursing",
+            "Operations, Logistics & Supply Chain",
+            "Skilled Trades, HVAC & Manufacturing",
+            "First Responders & Public Safety",
+            "Military Transition & Defense Operations",
+            "Corporate, Finance & Human Resources",
+            "General Professional / Business Operations"
+        ]
+        chosen_track = st.selectbox("Select Your Career Track", popular_tracks, key="onboarding_popular_track_select")
+        if st.button("Save Career Track & Continue ➔", width="stretch", key="btn_save_popular_track"):
+            profile = career_compass.auto_detect_alignment_from_resume(
+                st.session_state.get("resume_text", ""),
+                use_ai=False,
+                industry_hint=chosen_track
+            )
+            profile["industry_title"] = chosen_track
+            profile["adapted_prompt"] = career_compass.generate_adapted_custom_prompt(profile)
+            save_user_profile(profile)
+            st.session_state["user_profile"] = profile
+            set_active_prompt_mode(PROMPT_MODE_COMPASS)
+            mark_onboarding_completed()
+            st.session_state["show_quick_start"] = True
+            st.toast(f"🎯 Career Track Set: {chosen_track}!", icon="✅")
+            st.rerun()
+
+    with st.expander("📝 Or Take the Detailed 7-Question Career Direction Quiz"):
+        with st.form("onboarding_career_compass_quiz_form"):
+            user_answers = {}
+            for q in career_compass.UNIVERSAL_QUIZ_QUESTIONS:
+                st.markdown(f"**{q['title']}**")
+                st.caption(q["question"])
+                labels = [opt["label"] for opt in q["options"]]
+                chosen_label = st.radio(
+                    label=q["title"],
+                    options=labels,
+                    index=0,
+                    key=f"onboarding_q_{q['id']}",
+                    label_visibility="collapsed"
+                )
+                user_answers[q["id"]] = labels.index(chosen_label)
+                st.markdown("<br>", unsafe_allow_html=True)
+
+            if st.form_submit_button("Complete Setup & Launch Skippy 🚀", type="primary", width="stretch"):
+                profile = career_compass.score_quiz_responses(user_answers)
+                profile["adapted_prompt"] = career_compass.generate_adapted_custom_prompt(profile)
+                save_user_profile(profile)
+                st.session_state["user_profile"] = profile
+                set_active_prompt_mode(PROMPT_MODE_COMPASS)
+                mark_onboarding_completed()
+                st.session_state["show_quick_start"] = True
+                st.success(f"🎯 Career Profile Set: {profile.get('industry_title') or profile.get('archetype_title', 'Specialist')}! Initializing dashboard...")
+                st.rerun()
+
+    st.markdown("")
+    if st.button("⏭️ Skip for Now & Launch Skippy", type="secondary", width="stretch", help="Proceed with standard settings. You can set up your career profile anytime from the Career Profile tab."):
+        st.session_state["quiz_onboarding_skipped"] = True
+        set_active_prompt_mode(PROMPT_MODE_CUSTOM)
+        mark_onboarding_completed()
+        st.session_state["show_quick_start"] = True
+        st.rerun()
+
+    st.markdown("---")
+    render_help_section(in_sidebar=False)
+    st.stop()
+
+
 def enforce_onboarding():
     enforce_authentication()
 
     # CRITICAL: Onboarding runs strictly once on the first launch.
-    # Subsequent launches immediately bypass onboarding!
     if is_onboarding_completed():
         return
 
@@ -1396,306 +1634,12 @@ def enforce_onboarding():
                 logout_user()
                 st.rerun()
 
-    # =========================================================================
-    # STEP 1: Connect AI Provider
-    # =========================================================================
     if not has_key:
-        st.title("Welcome to Skippy! 🦘")
-        st.progress(0.33, text="Step 1 of 3: Connect Your AI Provider")
-        st.write("Before reviewing job postings and tailoring resumes, connect Skippy to an AI provider.")
-
-        model_options = ["Google Gemini", "OpenAI ChatGPT", "xAI Grok", "Anthropic Claude", "Local / Custom (Ollama)"]
-        current_choice = st.session_state.get("model_choice", "Google Gemini")
-        if current_choice not in model_options:
-            current_choice = "Google Gemini"
-            st.session_state["model_choice"] = current_choice
-
-        if st.session_state.get("onboarding_model_choice_select") not in model_options:
-            st.session_state["onboarding_model_choice_select"] = current_choice
-
-        selected_model = st.selectbox(
-            "Select AI Provider",
-            model_options,
-            key="onboarding_model_choice_select",
-        )
-        if "Local" not in selected_model:
-            st.session_state["model_choice"] = selected_model
-            st.session_state["sb_model_choice_select"] = selected_model
-
-        api_key_val = st.session_state.get("user_api_key", "")
-        local_base = st.session_state.get("local_base_url", "http://localhost:11434/v1")
-        local_model = st.session_state.get("local_model_name", "llama3")
-
-        with st.container():
-            if selected_model == "Google Gemini":
-                st.info(
-                    "💡 **Google Gemini is recommended**. "
-                    "[Click here to get your Gemini API key from Google AI Studio ↗](https://aistudio.google.com/app/apikey)",
-                    icon="✨"
-                )
-                api_key_input = st.text_input(
-                    "Enter Google Gemini API Key",
-                    value=api_key_val,
-                    type="password",
-                    key="onboarding_gemini_api_key_input",
-                    on_change="ignore",
-                    help="Get a free key from Google AI Studio (takes 30 seconds, no credit card required)."
-                )
-            elif selected_model == "Local / Custom (Ollama)":
-                st.info(
-                    "💻 **100% Private & Offline**: Requires [Ollama](https://ollama.com) running on your computer. "
-                    "In your terminal, start your model with: `ollama run llama3`",
-                    icon="🖥️"
-                )
-                c_url, c_mod = st.columns(2)
-                with c_url:
-                    local_base = st.text_input(
-                        "Local API Base URL",
-                        value=local_base,
-                        key="onboarding_local_base_url_input",
-                        on_change="ignore",
-                    )
-                with c_mod:
-                    local_model = st.text_input(
-                        "Local Model Name",
-                        value=local_model,
-                        key="onboarding_local_model_name_input",
-                        on_change="ignore",
-                    )
-                api_key_input = ""
-            else:
-                provider_slug = selected_model.replace(" ", "_").lower()
-                api_key_input = st.text_input(
-                    f"Enter {selected_model} API Key",
-                    value=api_key_val,
-                    type="password",
-                    key=f"onboarding_{provider_slug}_api_key_input",
-                    on_change="ignore",
-                    help=f"Enter your API key for {selected_model}."
-                )
-
-        clean_input_key = (api_key_input or "").strip().strip("'\"")
-
-        col_test, col_save = st.columns([1, 1.4])
-        with col_test:
-            test_clicked = st.button(
-                "🧪 Test Connection",
-                key="btn_onboarding_test_connection",
-                type="secondary",
-                width="stretch",
-            )
-        with col_save:
-            save_clicked = st.button(
-                "Save & Continue ➔",
-                key="btn_onboarding_save_continue",
-                type="primary",
-                width="stretch",
-            )
-
-        status_slot = st.empty()
-
-        st.markdown("---")
-        render_help_section(in_sidebar=False)
-
-        if test_clicked:
-            status_slot.info("⏳ Testing AI connection...")
-            test_key = clean_input_key if selected_model != "Local / Custom (Ollama)" else ""
-            ok, msg = test_ai_connection(
-                selected_model,
-                test_key,
-                local_base_url=local_base,
-                local_model_name=local_model,
-            )
-            if ok:
-                status_slot.success(f"✅ {msg}")
-            else:
-                status_slot.error(f"❌ {msg}")
-
-        if save_clicked:
-            st.session_state["model_choice"] = selected_model
-            st.session_state["sb_model_choice_select"] = selected_model
-            set_setting("model_choice", selected_model)
-            if selected_model == "Local / Custom (Ollama)":
-                set_setting("local_base_url", local_base)
-                set_setting("local_model_name", local_model)
-                st.session_state["local_base_url"] = local_base
-                st.session_state["local_model_name"] = local_model
-                st.session_state["sb_local_base_url"] = local_base
-                st.session_state["sb_local_model_name"] = local_model
-                st.session_state["show_key_success"] = True
-                st.rerun()
-            else:
-                if clean_input_key:
-                    save_local_config(clean_input_key)
-                    st.session_state["user_api_key"] = clean_input_key
-                    st.session_state["show_key_success"] = True
-                    st.rerun()
-                else:
-                    status_slot.warning("Please enter a valid API key to continue.")
-
-        st.stop()
-
-    # =========================================================================
-    # STEP 2: Add Master Resume
-    # =========================================================================
+        _render_onboarding_step_provider()
     if not has_resume:
-        st.title("Welcome to Skippy! 🦘")
-        st.progress(0.66, text="Step 2 of 3: Add Your Master Resume")
-        st.write(
-            "Your **Master Resume** is your complete work history containing all your jobs, skills, certifications, and projects. "
-            "Don't worry about keeping it under one page! Skippy will pick and choose the best parts whenever it creates a custom resume for a specific job."
-        )
-        st.info("🔒 **100% Local Privacy:** Your resume is stored safely in your local SQLite database on your hard drive and is never shared.", icon="🛡️")
-
-        # 1. File Uploader
-        uploaded_resume_file = st.file_uploader(
-            "📁 Drag and drop your resume file (.docx, .pdf, .md, .txt):",
-            type=["docx", "pdf", "md", "txt"],
-            key="onboarding_resume_file_uploader",
-            help="Upload your existing resume in Word, PDF, Markdown, or text format."
-        )
-
-        if uploaded_resume_file is not None:
-            extracted_resume_text = parse_resume_file(uploaded_resume_file)
-            if extracted_resume_text and extracted_resume_text.strip():
-                st.session_state["onboarding_resume_text_buffer"] = extracted_resume_text
-                st.toast(f"Extracted resume from {uploaded_resume_file.name}!", icon="📄")
-
-        # 2. Text Area (Review, Edit, or Paste Directly)
-        current_buffer = st.session_state.get("onboarding_resume_text_buffer", "")
-        with st.form("onboarding_resume_form"):
-            initial_resume = st.text_area(
-                "Master Resume Content (Editable):",
-                value=current_buffer,
-                height=320,
-                placeholder="# Your Name\n\n## Experience\n- Lead Role at Company (2020-Present)...",
-                help="Review, edit, or paste your work history here."
-            )
-            saved = st.form_submit_button("Save Resume & Continue ➔", type="primary", width="stretch")
-
-            if saved:
-                if not initial_resume.strip():
-                    st.warning("Please upload a file or paste your resume before proceeding.")
-                else:
-                    st.session_state.resume_text = initial_resume
-                    save_resumes({"Master Resume": initial_resume})
-                    st.session_state["resumes_vault"] = {"Master Resume": initial_resume}
-                    st.session_state["selected_resumes"] = ["Master Resume"]
-                    st.success("Master resume saved! Setting up your career profile...")
-                    st.rerun()
-
-        st.markdown("---")
-        render_help_section(in_sidebar=False)
-        st.stop()
-
-    # =========================================================================
-    # STEP 3: Career Direction & Profile
-    # =========================================================================
+        _render_onboarding_step_resume()
     if not has_profile:
-        st.title("Welcome to Skippy! 🦘")
-        st.progress(1.0, text="Step 3 of 3: Choose Your Career Field & Direction")
-        st.markdown(
-            "Skippy adapts to candidates across all walks of work—from skilled trades, first responders, "
-            "and military veterans to healthcare clinicians, engineers, and business professionals. "
-            "Let AI discover your profile from your resume in 1 click, choose a career field, or answer 7 quick questions."
-        )
-
-        # Primary Hero Action: Auto-Detect
-        with st.container(border=True):
-            st.markdown("### ⚡ Auto-Detect Career Profile from Resume (Recommended)")
-            st.caption("AI analyzes your uploaded master resume to automatically identify your career field, licenses, specialized tools, and core competencies.")
-            if st.button("⚡ Generate Career Profile with AI", type="primary", width="stretch", key="btn_onboard_hero_autodetect"):
-                with st.spinner("Setting up your career profile..."):
-                    detected_profile = career_compass.auto_detect_alignment_from_resume(
-                        st.session_state.get("resume_text", ""),
-                        use_ai=True,
-                        industry_hint="",
-                        model_choice=st.session_state.get("model_choice"),
-                        api_key=st.session_state.get("user_api_key")
-                    )
-                    adapted_prompt = career_compass.generate_adapted_custom_prompt(detected_profile)
-                    detected_profile["adapted_prompt"] = adapted_prompt
-                    save_user_profile(detected_profile)
-                    st.session_state["user_profile"] = detected_profile
-                    set_active_prompt_mode(PROMPT_MODE_COMPASS)
-                    mark_onboarding_completed()
-                    st.session_state["show_quick_start"] = True
-                    st.toast(f"🎯 Career Profile Detected: {detected_profile.get('industry_title') or detected_profile.get('archetype_title', 'Specialist')}", icon="✅")
-                    st.rerun()
-
-        # Quick Career Track Selector
-        with st.expander("🎯 Or Choose a Popular Career Track"):
-            popular_tracks = [
-                "Technology & Software Engineering",
-                "Clinical Healthcare & Nursing",
-                "Operations, Logistics & Supply Chain",
-                "Skilled Trades, HVAC & Manufacturing",
-                "First Responders & Public Safety",
-                "Military Transition & Defense Operations",
-                "Corporate, Finance & Human Resources",
-                "General Professional / Business Operations"
-            ]
-            chosen_track = st.selectbox("Select Your Career Track", popular_tracks, key="onboarding_popular_track_select")
-            if st.button("Save Career Track & Continue ➔", width="stretch", key="btn_save_popular_track"):
-                profile = career_compass.auto_detect_alignment_from_resume(
-                    st.session_state.get("resume_text", ""),
-                    use_ai=False,
-                    industry_hint=chosen_track
-                )
-                profile["industry_title"] = chosen_track
-                adapted_prompt = career_compass.generate_adapted_custom_prompt(profile)
-                profile["adapted_prompt"] = adapted_prompt
-                save_user_profile(profile)
-                st.session_state["user_profile"] = profile
-                set_active_prompt_mode(PROMPT_MODE_COMPASS)
-                mark_onboarding_completed()
-                st.session_state["show_quick_start"] = True
-                st.toast(f"🎯 Career Track Set: {chosen_track}!", icon="✅")
-                st.rerun()
-
-        # Optional Detailed Quiz
-        with st.expander("📝 Or Take the Detailed 7-Question Career Direction Quiz"):
-            with st.form("onboarding_career_compass_quiz_form"):
-                user_answers = {}
-                for q in career_compass.UNIVERSAL_QUIZ_QUESTIONS:
-                    st.markdown(f"**{q['title']}**")
-                    st.caption(q["question"])
-                    labels = [opt["label"] for opt in q["options"]]
-                    chosen_label = st.radio(
-                        label=q["title"],
-                        options=labels,
-                        index=0,
-                        key=f"onboarding_q_{q['id']}",
-                        label_visibility="collapsed"
-                    )
-                    user_answers[q["id"]] = labels.index(chosen_label)
-                    st.markdown("<br>", unsafe_allow_html=True)
-
-                quiz_submitted = st.form_submit_button("Complete Setup & Launch Skippy 🚀", type="primary", width="stretch")
-                if quiz_submitted:
-                    profile = career_compass.score_quiz_responses(user_answers)
-                    adapted_prompt = career_compass.generate_adapted_custom_prompt(profile)
-                    profile["adapted_prompt"] = adapted_prompt
-                    save_user_profile(profile)
-                    st.session_state["user_profile"] = profile
-                    set_active_prompt_mode(PROMPT_MODE_COMPASS)
-                    mark_onboarding_completed()
-                    st.session_state["show_quick_start"] = True
-                    st.success(f"🎯 Career Profile Set: {profile.get('industry_title') or profile.get('archetype_title', 'Specialist')}! Initializing dashboard...")
-                    st.rerun()
-
-        # Skip for now
-        st.markdown("")
-        if st.button("⏭️ Skip for Now & Launch Skippy", type="secondary", width="stretch", help="Proceed with standard settings. You can set up your career profile anytime from the Career Profile tab."):
-            st.session_state["quiz_onboarding_skipped"] = True
-            set_active_prompt_mode(PROMPT_MODE_CUSTOM)
-            mark_onboarding_completed()
-            st.session_state["show_quick_start"] = True
-            st.rerun()
-
-        st.markdown("---")
-        render_help_section(in_sidebar=False)
-        st.stop()
+        _render_onboarding_step_profile()
 
 def render_completion_card(batch_jobs: list[dict], source_label: str = "Scraper"):
     """
@@ -1770,7 +1714,6 @@ def render_completion_card(batch_jobs: list[dict], source_label: str = "Scraper"
                     "urls": [j.get("URL") for j in batch_jobs],
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
                 }
-                st.session_state["active_history_source"] = source_label
                 st.session_state.pop("completion_batch", None)
                 pipeline_manager.dismiss_latest_run()
                 navigate_to_page("pages/2_history.py")

@@ -96,21 +96,6 @@ def remove_inbox_job_by_url(url: str):
         if len(updated) != len(current):
             _write_inbox_unlocked(updated)
 
-def clear_inbox():
-    """Thread-safe removal of inbox.json."""
-    removed = False
-    with _inbox_lock:
-        if os.path.exists(INBOX_FILE):
-            try:
-                os.remove(INBOX_FILE)
-                removed = True
-            except OSError:
-                removed = False
-        else:
-            removed = True
-    if not removed:
-        save_inbox_jobs([])
-
 class JobPayload(BaseModel):
     source: str = Field(default="linkedin_extension", max_length=100)
     url: str = Field(..., max_length=2048)
